@@ -1,0 +1,30 @@
+# --- 编辑器与系统文件 ---
+.vscode/
+.idea/
+.DS_Store
+*.log
+Thumbs.db
+
+# --- 后端 (Python/FastAPI) ---
+backend/__pycache__/
+backend/*.pyc
+backend/venv/
+backend/.env
+backend/.pytest_cache/
+
+# 忽略本地生成的数据（非常重要，否则 Git 会变大且不安全）
+backend/data/uploads/
+backend/data/faiss_index/
+backend/data/chroma_db/
+backend/test_db/
+
+# --- 前端 (Vue 3/Vite) ---
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/*.local
+frontend/.eslintcache
+
+# --- 依赖锁文件（可选，如果你想保持环境绝对一致可以不忽略） ---
+# package-lock.json
+# yarn.lock

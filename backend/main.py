@@ -1,0 +1,42 @@
+import os
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.staticfiles import StaticFiles
+
+from app.api.endpoints import test, chat, auth
+from app.core.config import settings
+
+app = FastAPI(title=settings.PROJECT_NAME)
+
+UPLOAD_DIR = "data/uploads/avatars"
+if not os.path.exists(UPLOAD_DIR):
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+app.mount("/static", StaticFiles(directory="data/uploads"), name="static")
+
+# --- 1. 配置跨域 ---
+origins = [
+    "http://localhost:5173",    # Vue默认开发端口
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",    # 其他常见前端端口
+    "*"                         # 开发环境可以先设为 * 允许所有，生产环境需改回具体域名
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,      # 允许这些来源访问
+    allow_credentials=True,
+    allow_methods=["*"],        # 允许所有方法 (GET, POST等)
+    allow_headers=["*"],        # 允许所有请求头
+)
+
+# --- 2. 注册路由 ---
+# 注意：chat 路由的 prefix 是 /api/v1/chat
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["认证"])
+app.include_router(chat.router, prefix="/api/v1/chat", tags=["智能问答"])
+app.include_router(test.router, prefix="/api/v1/test", tags=["测试"]) # 建议改为 /v1/test
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
