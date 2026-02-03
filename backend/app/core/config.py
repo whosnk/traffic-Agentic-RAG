@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     REDIS_HOST: str = "127.0.0.1"
     REDIS_PORT: int = 6379
 
+    # --- 增加高德 Key ---
+    AMAP_KEY: Optional[str] = None
+
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
         return (

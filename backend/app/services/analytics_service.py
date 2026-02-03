@@ -1,52 +1,63 @@
-# app/services/analytics_service.py
+# app/services/analytics_service.py 完整优化版
+import re
+
 import numpy as np
 from sklearn.cluster import KMeans
-from collections import Counter
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sqlalchemy.orm import Session
-from app.models import ChatMessage
-import logging
-
-logger = logging.getLogger(__name__)
-
+from app.models import ChatMessage, HotTopic
+import json
+from app.core.prompts import ANALYTICS_SUMMARY_PROMPT
 
 class AnalyticsService:
-    def __init__(self, embedding_model):
+    def __init__(self, embedding_model, llm):
         self.embedding_model = embedding_model
+        self.llm = llm
 
-    def analyze_hot_topics(self, db: Session, n_clusters=5):
-        """对用户提问进行聚类分析"""
-        # 1. 从数据库提取所有用户提问
+    async def perform_deep_analysis(self, db: Session):
+        """深度聚类分析"""
+        # 1. 提取最近 1000 条用户提问
         messages = db.query(ChatMessage).filter(ChatMessage.role == "user").all()
-        texts = [m.content for m in messages if len(m.content) > 2]
+        texts = [m.content for m in messages if len(m.content) > 5]
 
-        if len(texts) < n_clusters:
-            return []
+        if len(texts) < 10: return "数据量不足，无法分析"
 
-        try:
-            # 2. 将提问文本转化为向量
-            # 注意：由于我们之前写了 AliyunEmbeddingWrapper，这里直接复用
-            vectors = self.embedding_model.embed_documents(texts)
-            X = np.array(vectors)
+        # 2. 向量化
+        vectors = self.embedding_model.embed_documents(texts)
+        X = np.array(vectors)
 
-            # 3. 执行 K-Means 聚类
-            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-            kmeans.fit(X)
+        # 3. 聚类 (固定 5 簇，或动态计算)
+        n_clusters = min(5, len(texts))
+        kmeans = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
+        labels = kmeans.fit_predict(X)
 
-            # 4. 统计每个簇的数量并提取核心词（这里简化处理，取每个簇的代表性短语）
-            results = []
-            labels = kmeans.labels_
-            for i in range(n_clusters):
-                cluster_msgs = [texts[j] for j in range(len(texts)) if labels[j] == i]
-                # 简单逻辑：取该簇中最短的一个句子作为“主题名”
-                topic_name = min(cluster_msgs, key=len)
-                results.append({
-                    "topic": topic_name[:10],  # 截取前10个字作为标签
-                    "count": len(cluster_msgs),
-                    "full_texts": cluster_msgs[:5]  # 详情预览
-                })
+        # 4. 针对每一个簇进行 AI 总结和关键词提取
+        db.query(HotTopic).delete()  # 清空旧记录
 
-            # 按热度排序
-            return sorted(results, key=lambda x: x['count'], reverse=True)
-        except Exception as e:
-            logger.error(f"聚类分析失败: {e}")
-            return []
+        for i in range(n_clusters):
+            cluster_msgs = [texts[j] for j in range(len(texts)) if labels[j] == i]
+            if not cluster_msgs: continue
+
+            # 使用专业的分析提示词
+            prompt = ANALYTICS_SUMMARY_PROMPT.format(cluster_messages="\n".join(cluster_msgs[:10]))
+            try:
+                res = self.llm.invoke(prompt)
+                # 同样的 JSON 提取逻辑
+                json_match = re.search(r'\{.*\}', res.content, re.DOTALL)
+                analysis_result = json.loads(json_match.group())
+
+                topic_name = analysis_result.get("topic_name", "未分类主题")
+                keywords = analysis_result.get("keywords", ["交通"])
+            except:
+                topic_name = f"热点话题 {i + 1}"
+                keywords = ["点击查看详情"]
+
+            db.add(HotTopic(
+                topic_name=topic_name,
+                hit_count=len(cluster_msgs),
+                keywords=keywords,
+                representative_queries=cluster_msgs[:3]
+            ))
+
+        db.commit()
+        return "分析完成"

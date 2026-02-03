@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from app.db.session import SessionLocal
-from app.models import ChatSession, ChatMessage, User
+from app.models import ChatSession, ChatMessage, User, HotTopic
 from app.models.knowledge import KnowledgeDoc
 from app.services.analytics_service import AnalyticsService
 from app.services.rag_service import RAGService
@@ -172,11 +172,32 @@ def get_analytics(
         service: RAGService = Depends(get_rag_service),
         current_user: User = Depends(get_current_user)
 ):
-    """管理员获取数据分析结果"""
+    """获取已存在的分析结果"""
     if current_user.role != "admin":
-        raise HTTPException(403, "无权访问分析数据")
+        raise HTTPException(403, "权限不足")
 
-    # 利用 RAGService 里的 embedding 对象进行分析
-    analyzer = AnalyticsService(service.custom_embeddings)
-    data = analyzer.analyze_hot_topics(db)
-    return data
+    # 直接从数据库查询分析好的结果
+    return db.query(HotTopic).order_by(HotTopic.hit_count.desc()).all()
+
+
+@router.post("/perform_analysis")
+async def perform_analysis(
+        db: Session = Depends(get_db),
+        service: RAGService = Depends(get_rag_service),
+        current_user: User = Depends(get_current_user)
+):
+    """手动触发 AI 聚类分析引擎"""
+    if current_user.role != "admin":
+        raise HTTPException(403, "权限不足")
+
+    try:
+        # --- 关键修复：传入 service.custom_embeddings 和 service.llm ---
+        analyzer = AnalyticsService(service.custom_embeddings, service.llm)
+
+        # 执行深度分析
+        result_msg = await analyzer.perform_deep_analysis(db)
+
+        return {"status": "success", "message": result_msg}
+    except Exception as e:
+        logger.error(f"分析引擎运行失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

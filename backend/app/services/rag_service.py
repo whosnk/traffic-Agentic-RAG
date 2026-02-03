@@ -9,6 +9,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import ChatOpenAI
 from app.core.config import settings
 from app.services.config_service import ConfigService
+from app.services.tool_service import ToolService
+from app.core.prompts import INTENT_DISPATCH_PROMPT, RAG_SYSTEM_PROMPT
 
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 logger = logging.getLogger("RAGService")
@@ -71,29 +73,64 @@ class RAGService:
         self.vector_db.save_local(self.index_path)
         return len(valid_texts)
 
-    async def chat_stream(self, query: str, session_id: str):
-        if not self.vector_db: yield json.dumps({"type": "error", "data": "未上传知识库"}); return
+    async def chat_stream(self, query: str, session_id: str = "default"):
+        # --- 1. 意图分拣 (Intent Dispatching) ---
+        dispatch_msg = INTENT_DISPATCH_PROMPT.format(query=query)
+        try:
+            # 这里的 llm 调用建议不开启 streaming，因为我们要处理 JSON 逻辑
+            intent_res = self.llm.invoke(dispatch_msg)
+            # 提取 JSON（防止 AI 话多带了前缀）
+            json_match = re.search(r'\{.*\}', intent_res.content, re.DOTALL)
+            intent_obj = json.loads(json_match.group()) if json_match else {"intent": "LEGAL_QUERY"}
 
-        query = self.strict_clean(query)
+            # 分支路由
+            if intent_obj["intent"] == "NAVIGATION":
+                p = intent_obj.get("params", {})
+                yield json.dumps({"type": "content", "data": f"🔄 **正在为您规划 {p.get('mode', '驾车')} 路线...**\n\n"})
+                route_info = await ToolService.get_route_plan(p.get('from'), p.get('to'), p.get('mode', 'driving'))
+                yield json.dumps({"type": "content", "data": route_info})
+                yield json.dumps({"type": "done"});
+                return
+
+            elif intent_obj["intent"] == "CHITCHAT":
+                yield json.dumps(
+                    {"type": "content", "data": "您好！我是您的智能交通助手。您可以问我‘交通法规咨询’或‘出行路径规划’。"})
+                yield json.dumps({"type": "done"});
+                return
+
+            elif intent_obj["intent"] == "INVALID":
+                yield json.dumps({"type": "content", "data": "抱歉，我只能处理与交通、出行和法律相关的内容。请重新输入。"})
+                yield json.dumps({"type": "done"});
+                return
+        except Exception as e:
+            logger.error(f"Intent Error: {e}")  # 分拣失败则默认往下走 RAG
+
+        # --- 2. 专家 RAG 流程 ---
+        # 检索依据
         docs_with_scores = self.vector_db.similarity_search_with_score(query, k=6)
         filtered_docs = [doc for doc, score in docs_with_scores if score < 0.85]
 
         if not filtered_docs:
-            yield json.dumps({"type": "content", "data": "知识库中暂无相关法律依据。"})
+            yield json.dumps({"type": "content", "data": "抱歉，在知识库中未找到相关法律依据。建议咨询人工客服。"})
             yield json.dumps({"type": "done"});
             return
 
         sources = [doc.page_content for doc in filtered_docs]
         yield json.dumps({"type": "sources", "data": sources})
 
+        # 组织上下文和历史
         context = "\n".join([f"[依据{i + 1}]: {d.page_content}" for i, d in enumerate(filtered_docs)])
-        prompt = f"请基于以下法律依据回答问题，禁止编造：\n{context}\n\n问题：{query}"
+        history_str = ""  # 可从 Redis 获取逻辑保持不变
 
-        full_answer = ""
-        async for chunk in self.llm.astream(prompt):
+        # 使用专家 Prompt
+        final_prompt = RAG_SYSTEM_PROMPT.format(
+            context=context,
+            history=history_str,
+            query=query
+        )
+
+        async for chunk in self.llm.astream(final_prompt):
             if chunk.content:
-                full_answer += chunk.content
-                # 核心：确保 yield 的 JSON 只有一行
                 yield json.dumps({"type": "content", "data": chunk.content}, ensure_ascii=False)
 
-        yield json.dumps({"type": "done", "full_answer": full_answer})
+        yield json.dumps({"type": "done"})
