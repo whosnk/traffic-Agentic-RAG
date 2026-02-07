@@ -23,12 +23,19 @@ origins = [
     "*"                         # 开发环境可以先设为 * 允许所有，生产环境需改回具体域名
 ]
 
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=origins,      # 允许这些来源访问
+#     allow_credentials=True,
+#     allow_methods=["*"],        # 允许所有方法 (GET, POST等)
+#     allow_headers=["*"],        # 允许所有请求头
+# )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,      # 允许这些来源访问
+    allow_origins=["*"], # 开发阶段最稳妥的方法
     allow_credentials=True,
-    allow_methods=["*"],        # 允许所有方法 (GET, POST等)
-    allow_headers=["*"],        # 允许所有请求头
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # --- 2. 注册路由 ---
@@ -39,4 +46,4 @@ app.include_router(test.router, prefix="/api/v1/test", tags=["测试"]) # 建议
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

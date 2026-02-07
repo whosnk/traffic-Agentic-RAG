@@ -14,6 +14,7 @@ from app.db.session import SessionLocal
 from app.models import ChatSession, ChatMessage, User, HotTopic
 from app.models.knowledge import KnowledgeDoc
 from app.services.analytics_service import AnalyticsService
+from app.services.graph_service import GraphService
 from app.services.rag_service import RAGService
 from app.core.security import SECRET_KEY, ALGORITHM
 from pydantic import BaseModel
@@ -201,3 +202,28 @@ async def perform_analysis(
     except Exception as e:
         logger.error(f"分析引擎运行失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/knowledge_graph")
+def get_graph(db: Session = Depends(get_db)):
+    """获取图谱数据"""
+    gs = GraphService(None) # 仅查询不需要LLM
+    return gs.get_full_graph(db)
+
+
+@router.post("/build_graph")
+async def build_graph(db: Session = Depends(get_db), service: RAGService = Depends(get_rag_service)):
+    """从数据库已有的 AI 回答中提取知识图谱"""
+    # 提取最近的 10 条 AI 生成的专业回答作为图谱来源
+    msgs = db.query(ChatMessage).filter(ChatMessage.role == "ai").order_by(ChatMessage.created_at.desc()).limit(
+        10).all()
+
+    if not msgs:
+        # 如果没聊天记录，就给一段测试文本，确保图谱不是空的
+        texts = ["饮酒后驾驶机动车的，处暂扣六个月机动车驾驶证，并处一千元以上二千元以下罚款。"]
+    else:
+        texts = [m.content for m in msgs]
+
+    gs = GraphService(service.llm)
+    await gs.build_from_texts(db, texts)
+    return {"status": "success", "message": f"已从 {len(texts)} 条文本中提取并更新图谱"}

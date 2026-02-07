@@ -2,66 +2,68 @@
   <div class="admin-page">
     <div class="bg-glow"></div>
     <div class="glass-card custom-scrollbar">
-      <!-- 1. 标题与上传区域 -->
+      <!-- 1. 标题与上传区域：适配移动端自动换行 -->
       <header class="admin-header">
         <div class="title-section">
           <el-icon :size="28" color="#409eff"><Collection /></el-icon>
-          <h2>交通法知识库管理</h2>
+          <h2>知识库管理</h2>
         </div>
         <el-upload 
           action="/api/v1/chat/upload" 
           :headers="headers" 
           :on-success="onUploadSuccess" 
           :show-file-list="false"
+          class="upload-btn-wrapper"
         >
-          <el-button type="primary" :icon="Plus" round>上传 PDF 法律法规</el-button>
+          <el-button type="primary" :icon="Plus" round>上传法规</el-button>
         </el-upload>
       </header>
 
-      <!-- 2. 知识库列表表格 -->
+      <!-- 2. 知识库列表表格：增加高度限制并允许内部滚动 -->
       <div class="table-wrapper">
-        <el-table :data="docs" style="width: 100%" class="modern-table">
-          <el-table-column prop="filename" label="文件名" min-width="250" />
-          <el-table-column prop="chunk_count" label="切片数量" width="120" align="center" />
-          <el-table-column prop="upload_time" label="上传时间" width="200" align="center">
+        <el-table :data="docs" style="width: 100%" class="modern-table" size="small">
+          <el-table-column prop="filename" label="文件名" min-width="180" show-overflow-tooltip />
+          <el-table-column prop="chunk_count" label="切片" width="60" align="center" />
+          <!-- 移动端隐藏上传时间列以节省空间，或者缩窄 -->
+          <el-table-column prop="upload_time" label="日期" width="100" align="center" class-name="hidden-xs">
             <template #default="scope">
-              {{ formatTime(scope.row.upload_time) }}
+              {{ formatShortDate(scope.row.upload_time) }}
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="120" align="center">
+          <el-table-column label="操作" width="80" align="center">
             <template #default="scope">
               <el-button type="danger" link @click="handleDelete(scope.row)">
-                <el-icon><Delete /></el-icon> 清空索引
+                <el-icon><Delete /></el-icon>
               </el-button>
             </template>
           </el-table-column>
         </el-table>
       </div>
 
-      <!-- 3. 数据分析看板区域 -->
+      <!-- 3. 数据分析看板区域：使用响应式栅格 -->
       <div class="analytics-dashboard">
         <el-divider content-position="left">
-          <el-icon><PieChart /></el-icon> 用户提问热点分析 (K-Means)
+          <el-icon><PieChart /></el-icon> 热点分析
         </el-divider>
 
         <el-row :gutter="20">
-          <!-- 左侧：ECharts 环形图 -->
-          <el-col :span="10">
+          <!-- 左侧：ECharts 环形图。在手机上占 24 格（全宽），电脑上占 10 格 -->
+          <el-col :xs="24" :sm="10">
             <div class="inner-card chart-box">
-              <div ref="chartRef" style="height: 350px; width: 100%;"></div>
+              <div ref="chartRef" class="echarts-container"></div>
             </div>
           </el-col>
 
-          <!-- 右侧：AI 热点话题列表 -->
-          <el-col :span="14">
+          <!-- 右侧：AI 热点话题列表。在手机上占 24 格，电脑上占 14 格 -->
+          <el-col :xs="24" :sm="14">
             <div class="inner-card topic-list">
               <h3>🔥 智能识别热点话题</h3>
               <el-scrollbar height="300px">
-                <div v-if="hotTopics.length === 0" class="no-data">暂无分析数据，请点击下方按钮运行</div>
+                <div v-if="hotTopics.length === 0" class="no-data">暂无分析数据</div>
                 <div v-for="item in hotTopics" :key="item.id" class="topic-item">
                   <div class="topic-header">
                     <span class="topic-title">{{ item.topic_name }}</span>
-                    <el-tag size="small" type="danger" effect="dark">{{ item.hit_count }} 次咨询</el-tag>
+                    <el-tag size="small" type="danger" effect="dark">{{ item.hit_count }} 次</el-tag>
                   </div>
                   <div class="topic-keywords">
                     <el-tag v-for="k in item.keywords" :key="k" size="small" effect="plain" class="k-tag"># {{ k }}</el-tag>
@@ -77,14 +79,17 @@
 
         <div class="action-bar">
           <el-button type="primary" :loading="analyzing" @click="startAnalysis" round>
-            <el-icon v-if="!analyzing"><Refresh /></el-icon> 重新运行 AI 聚类分析
+            <el-icon v-if="!analyzing"><Refresh /></el-icon> 重新分析
           </el-button>
         </div>
       </div>
 
       <!-- 4. 底部状态栏 -->
       <footer class="admin-footer">
-        <el-statistic title="系统总切片数" :value="totalChunks" />
+        <div class="stat-item">
+          <span class="label">总切片:</span>
+          <span class="value">{{ totalChunks }}</span>
+        </div>
         <el-button @click="$router.back()" link :icon="ArrowLeft">返回聊天</el-button>
       </footer>
     </div>
@@ -128,7 +133,7 @@ const initChart = (data: { topic: string; count: number }[]) => {
   const myChart = echarts.init(chartRef.value);
   const option = {
     title: { text: '咨询热点分布', left: 'center', textStyle: { fontSize: 14 } },
-    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+    tooltip: { trigger: 'item', formatter: '{b}: {c}' },
     series: [
       {
         type: 'pie',
@@ -172,23 +177,23 @@ const startAnalysis = async () => {
   analyzing.value = true;
   try {
     await request.post('/v1/chat/perform_analysis');
-    ElMessage.success('分析引擎运行成功');
+    ElMessage.success('分析完成');
     await fetchHotTopics();
   } catch (e) {
-    ElMessage.error('分析失败，请确保数据库有足够对话数据');
+    ElMessage.error('分析失败');
   } finally {
     analyzing.value = false;
   }
 };
 
 const onUploadSuccess = () => {
-  ElMessage.success('文件上传并切片成功');
+  ElMessage.success('上传成功');
   fetchDocs();
 };
 
 const handleDelete = async (row: DocItem) => {
   try {
-    await ElMessageBox.confirm(`确定要清空 [${row.filename}] 的索引吗？`, '警示', { type: 'warning' });
+    await ElMessageBox.confirm(`确定删除 [${row.filename}] 吗？`, '警告', { type: 'warning' });
     await request.delete(`/v1/chat/knowledge/${row.id}`);
     ElMessage.success('删除成功');
     fetchDocs();
@@ -197,7 +202,10 @@ const handleDelete = async (row: DocItem) => {
 
 // --- 辅助计算 ---
 const totalChunks = computed(() => docs.value.reduce((acc, cur) => acc + cur.chunk_count, 0));
-const formatTime = (t: string) => new Date(t).toLocaleString();
+const formatShortDate = (t: string) => {
+  const d = new Date(t);
+  return `${d.getMonth()+1}-${d.getDate()}`;
+};
 
 onMounted(fetchDocs);
 </script>
@@ -207,41 +215,98 @@ onMounted(fetchDocs);
   height: 100vh; width: 100vw; display: flex; justify-content: center; align-items: center;
   background: #f0f2f5; position: relative; overflow: hidden;
 }
+
 .bg-glow {
   position: absolute; width: 600px; height: 600px; background: rgba(64, 158, 255, 0.1);
   filter: blur(100px); top: -200px; left: -200px;
 }
+
 .glass-card {
-  width: 1100px; height: 92%; background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(20px); border-radius: 24px; border: 1px solid rgba(255,255,255,0.5);
-  display: flex; flex-direction: column; padding: 30px; box-shadow: 0 20px 50px rgba(0,0,0,0.05);
+  width: 95%; 
+  max-width: 1100px; 
+  height: 94%; 
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(20px); 
+  border-radius: 24px; 
+  border: 1px solid rgba(255,255,255,0.5);
+  display: flex; 
+  flex-direction: column; 
+  padding: 20px; 
+  box-shadow: 0 20px 50px rgba(0,0,0,0.05);
   overflow-y: auto;
+
+  @media (max-width: 768px) {
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    padding: 15px;
+  }
 }
+
 .admin-header {
-  display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;
-  .title-section { display: flex; align-items: center; gap: 15px; h2 { margin: 0; font-size: 22px; } }
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center; 
+  margin-bottom: 20px;
+
+  @media (max-width: 768px) {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 15px;
+    .upload-btn-wrapper { width: 100%; .el-button { width: 100%; } }
+  }
+
+  .title-section { display: flex; align-items: center; gap: 10px; h2 { margin: 0; font-size: 20px; } }
 }
-.table-wrapper { margin-bottom: 30px; }
+
+.table-wrapper { 
+  margin-bottom: 20px; 
+  /* 解决移动端表格溢出 */
+  :deep(.el-table__inner-wrapper) { overflow-x: auto; }
+}
+
 .analytics-dashboard {
   .inner-card {
-    background: rgba(255,255,255,0.4); border-radius: 16px; padding: 20px; border: 1px solid rgba(0,0,0,0.03);
+    background: rgba(255,255,255,0.5); border-radius: 16px; padding: 15px; margin-bottom: 20px;
+    border: 1px solid rgba(0,0,0,0.03);
   }
-  .no-data { text-align: center; color: #999; padding: 40px; }
-  .action-bar { text-align: center; margin-top: 20px; margin-bottom: 20px; }
+  
+  .echarts-container {
+    height: 300px; width: 100%;
+    @media (max-width: 768px) { height: 250px; }
+  }
+
+  .no-data { text-align: center; color: #999; padding: 20px; }
+  .action-bar { text-align: center; margin-bottom: 20px; }
 }
+
 .topic-item {
-  background: #fff; padding: 15px; border-radius: 12px; margin-bottom: 12px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
-  .topic-header { display: flex; justify-content: space-between; align-items: center;
-    .topic-title { font-weight: bold; color: #333; }
+  background: #fff; padding: 12px; border-radius: 12px; margin-bottom: 10px;
+  .topic-header { 
+    display: flex; justify-content: space-between; align-items: center;
+    .topic-title { font-weight: bold; color: #333; font-size: 14px; }
   }
-  .topic-keywords { margin: 8px 0; display: flex; gap: 5px; }
-  .topic-preview { font-size: 12px; color: #888; font-style: italic; p { margin: 4px 0; } }
+  .topic-keywords { margin: 6px 0; display: flex; flex-wrap: wrap; gap: 4px; }
+  .topic-preview { 
+    font-size: 11px; color: #888; font-style: italic; 
+    p { margin: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  }
 }
+
 .admin-footer {
-  margin-top: auto; padding-top: 20px; border-top: 1px solid rgba(0,0,0,0.05);
+  margin-top: auto; padding-top: 15px; border-top: 1px solid rgba(0,0,0,0.05);
   display: flex; justify-content: space-between; align-items: center;
+  .stat-item {
+    font-size: 13px; color: #666;
+    .value { font-weight: bold; color: #409eff; margin-left: 5px; }
+  }
 }
-.custom-scrollbar::-webkit-scrollbar { width: 5px; }
+
+/* 移动端隐藏特定列 */
+@media (max-width: 600px) {
+  .hidden-xs { display: none !important; }
+}
+
+.custom-scrollbar::-webkit-scrollbar { width: 4px; }
 .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 10px; }
 </style>

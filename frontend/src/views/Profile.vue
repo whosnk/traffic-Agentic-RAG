@@ -35,6 +35,8 @@
           <el-descriptions-item label="注册时间">{{ user.created_at || '2025-01-01' }}</el-descriptions-item>
         </el-descriptions>
         
+      <el-button type="success" @click="$router.push('/graph')" :icon="Share">查看知识图谱</el-button>    
+
         <div class="admin-entry" v-if="user.role === 'admin'">
   <el-divider>管理员操作</el-divider>
   <el-button type="warning" @click="$router.push('/admin')" :icon="Tools">
@@ -51,12 +53,11 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowLeft, Camera, SwitchButton, Tools } from '@element-plus/icons-vue';
+import { ArrowLeft, Camera, SwitchButton, Tools,Share } from '@element-plus/icons-vue';
 import { ref, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import request from '../api/request';
-
 const router = useRouter();
 const user = ref({ username: '', avatar: '', role: '', created_at: '' });
 
@@ -64,7 +65,8 @@ const authHeader = { Authorization: `Bearer ${localStorage.getItem('access_token
 
 const fullAvatarUrl = computed(() => {
   if (!user.value.avatar) return '';
-  return `http://localhost:8000${user.value.avatar}?t=${Date.now()}`;
+  // 统一去掉 http://localhost:8000，使用相对路径走 Vite 代理
+  return `${user.value.avatar}?t=${Date.now()}`;
 });
 
 const fetchUser = async () => {
@@ -129,4 +131,4 @@ onMounted(fetchUser);
   .hint { font-size: 13px; color: #999; margin-top: 10px; }
 }
 .logout-section { text-align: center; margin-top: 40px; }
-</style>
+</style>  

@@ -3,6 +3,7 @@ import Login from '../views/Login.vue';
 import Chat from '../views/Chat.vue';
 import Profile from '../views/Profile.vue';
 import Admin from '../views/Admin.vue';
+import GraphView from '../views/GraphView.vue';
 
 const routes = [
   { path: '/', redirect: '/login' },
@@ -23,6 +24,12 @@ const routes = [
     path: '/admin', 
     name: 'Admin', 
     component: Admin,
+    meta: { requiresAuth: true }
+  },
+  { 
+    path: '/graph', 
+    name: 'Graph', 
+    component: GraphView,
     meta: { requiresAuth: true }
   },
 ];
