@@ -47,7 +47,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { User, Lock, CircleCheck } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import request from '../api/request';
 

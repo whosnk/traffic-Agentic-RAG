@@ -203,12 +203,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick, computed, reactive } from 'vue';
-import { useRouter } from 'vue-router';
-import { Plus, ChatLineRound, Delete, Refresh, Document, Top, Menu, Microphone, Mic, VideoPlay, Setting, CaretTop, CaretBottom, HomeFilled, ChatDotSquare } from '@element-plus/icons-vue';
+import { ref, onMounted, nextTick, computed, reactive,onUnmounted } from 'vue';
+import { Plus, ChatLineRound, Delete, Refresh, Document, Top, Menu, Microphone, Mic, VideoPlay, Setting, CaretTop, CaretBottom, HomeFilled } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import request from '../api/request';
 import MarkdownIt from 'markdown-it';
+import { API_BASE_URL } from '../api/config';
+import { STATIC_BASE_URL } from '../api/config';
+import { Capacitor } from '@capacitor/core';
+import { TextToSpeech } from '@capacitor-community/text-to-speech';
 
 // --- 类型定义 ---
 interface SessionItem { id: string; title: string; updated_at?: string; }
@@ -220,7 +223,6 @@ interface Message {
   is_helpful?: boolean | null;
 }
 
-const router = useRouter();
 const sessions = ref<SessionItem[]>([]);
 const currentSessionId = ref('');
 const chatHistory = ref<Message[]>([]);
@@ -232,14 +234,18 @@ const currentUser = ref({ username: '', avatar: '' });
 const md = new MarkdownIt({ html: true, linkify: true });
 
 // --- 计算属性 ---
+// 修改计算属性
 const fullAvatarUrl = computed(() => {
   if (!currentUser.value.avatar) return 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix';
-  return `${window.location.origin}${currentUser.value.avatar}?t=${Date.now()}`;
+  
+  // 核心修改：使用 STATIC_BASE_URL 拼接
+  return `${STATIC_BASE_URL}${currentUser.value.avatar}?t=${Date.now()}`;
 });
 const currentSessionTitle = computed(() => sessions.value.find(i => i.id === currentSessionId.value)?.title || '新对话');
 
 // --- ASR 逻辑 ---
 const isRecording = ref(false);
+let webRecognition: any = null;
 const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 let recognition: any = null;
 if (SpeechRecognition) {
@@ -248,9 +254,60 @@ if (SpeechRecognition) {
   recognition.onresult = (event: any) => { inputQuery.value = event.results[0][0].transcript; };
   recognition.onend = () => { isRecording.value = false; };
 }
-const toggleRecognition = () => {
-  if (!recognition) return ElMessage.error('当前环境不支持语音输入');
-  isRecording.value ? recognition.stop() : (isRecording.value = true, recognition.start());
+// 切换录音状态
+const toggleRecognition = async () => {
+  if (isRecording.value) {
+    // --- 停止录音 ---
+    if (Capacitor.isNativePlatform()) {
+      await SpeechRecognition.stop();
+    } else if (webRecognition) {
+      webRecognition.stop();
+    }
+    isRecording.value = false;
+  } else {
+    // --- 开始录音 ---
+    inputQuery.value = ''; // 清空输入框
+    isRecording.value = true;
+
+    if (Capacitor.isNativePlatform()) {
+      // APP 模式
+      try {
+        const hasPermission = await SpeechRecognition.checkPermissions();
+        if (hasPermission.speechRecognition !== 'granted') {
+           await SpeechRecognition.requestPermissions();
+        }
+
+        await SpeechRecognition.start({
+          language: "zh-CN",
+          maxResults: 1,
+          prompt: "请说话...",
+          partialResults: true,
+          popup: false, // Android 上不显示系统自带弹窗，体验更好
+        });
+
+        // 监听实时结果
+        SpeechRecognition.addListener('partialResults', (data: any) => {
+          if (data.matches && data.matches.length > 0) {
+            inputQuery.value = data.matches[0];
+          }
+        });
+        
+        // 监听最终结果(部分手机可能不走 partialResults)
+        // 注意：插件不同版本行为不同，通常 partialResults 够用了
+      } catch (e) {
+        ElMessage.error('启动录音失败: ' + JSON.stringify(e));
+        isRecording.value = false;
+      }
+    } else {
+      // 网页模式
+      if (webRecognition) {
+        webRecognition.start();
+      } else {
+        ElMessage.warning('当前浏览器不支持语音识别');
+        isRecording.value = false;
+      }
+    }
+  }
 };
 
 // --- 初始化与业务 ---
@@ -267,8 +324,36 @@ onMounted(async () => {
     } else {
        createNewChat();
     }
+     // 初始化 APP 端语音识别权限
+  if (Capacitor.isNativePlatform()) {
+    try {
+      // 请求麦克风权限
+      await SpeechRecognition.requestPermissions();
+    } catch (e) {
+      console.error("无法获取麦克风权限", e);
+    }
+  } else {
+    // 初始化网页端识别
+    const WebSpeech = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (WebSpeech) {
+      webRecognition = new WebSpeech();
+      webRecognition.lang = 'zh-CN';
+      webRecognition.interimResults = true;
+      webRecognition.onresult = (event: any) => {
+        inputQuery.value = event.results[0][0].transcript;
+      };
+      webRecognition.onend = () => { isRecording.value = false; };
+    }
+  }
   } catch (e) { 
       // 忽略部分错误，防止页面白屏
+  }
+});
+
+// 销毁时清理监听
+onUnmounted(() => {
+  if (Capacitor.isNativePlatform()) {
+    SpeechRecognition.removeAllListeners();
   }
 });
 
@@ -306,9 +391,12 @@ const handleSend = async () => {
   await scrollToBottom();
 
   try {
-    const response = await fetch('/api/v1/chat/ask_stream', {
+     const streamUrl = `${API_BASE_URL}/v1/chat/ask_stream`;
+    const response = await fetch(streamUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('access_token')}` },
+      headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${localStorage.getItem('access_token')}` },
       body: JSON.stringify({ question, session_id: sid })
     });
     
@@ -354,10 +442,33 @@ const handleFeedback = async (msg: Message, helpful: boolean) => {
   } catch (e) { ElMessage.error('失败'); }
 };
 
-const speak = (t: string) => {
-  window.speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(t.replace(/[#*`>]/g, '').replace(/\[依据\d+\]/g, ''));
-  u.lang = 'zh-CN'; window.speechSynthesis.speak(u);
+// --- 1. 兼容性 TTS (语音朗读) ---
+const speak = async (text: string) => {
+  // 清洗 Markdown 符号
+  const cleanText = text.replace(/[#*`>]/g, '').replace(/\[依据\d+\]/g, '');
+
+  if (Capacitor.isNativePlatform()) {
+    // === APP 模式：使用 Native TTS ===
+    try {
+      await TextToSpeech.stop(); // 先停止之前的
+      await TextToSpeech.speak({
+        text: cleanText,
+        lang: 'zh-CN',
+        rate: 1.0,
+        pitch: 1.0,
+        volume: 1.0,
+        category: 'ambient',
+      });
+    } catch (e) {
+      ElMessage.error('语音朗读失败，请检查手机设置');
+    }
+  } else {
+    // === 网页模式：使用浏览器 API ===
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.lang = 'zh-CN';
+    window.speechSynthesis.speak(utterance);
+  }
 };
 const formatTime = (t?: string) => t ? new Date(t).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
 const renderMarkdown = (t: string) => md.render(t);
@@ -373,7 +484,6 @@ const deleteSession = async (id: string) => {
 };
 
 // 辅助函数：解决 TS 6133 报错
-function jsonParseSafe(str: string) { try { return JSON.parse(str); } catch(e) { return null; } }
 </script>
 
 <style scoped lang="scss">

@@ -1,0 +1,40 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.7.2'
+        classpath 'com.google.gms:google-services:4.4.2'
+        // 1. 添加 Kotlin 插件依赖（版本建议和 Android Gradle 插件匹配，8.7.2 适配 1.9.x 版本）
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.23"
+
+        // NOTE: Do not place your application dependencies here; they belong
+        // in the individual module build.gradle files
+    }
+}
+
+apply from: "variables.gradle"
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    // 2. 添加版本统一配置，强制所有模块使用相同的 Kotlin 版本
+    configurations.all {
+        resolutionStrategy {
+            // 强制统一 Kotlin 标准库版本（和插件版本保持一致）
+            force "org.jetbrains.kotlin:kotlin-stdlib:1.9.23"
+            force "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.23"
+            force "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.23"
+        }
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}

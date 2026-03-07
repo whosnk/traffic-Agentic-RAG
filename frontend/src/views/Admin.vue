@@ -9,10 +9,11 @@
           <h2>知识库管理</h2>
         </div>
         <el-upload 
-          action="/api/v1/chat/upload" 
+          :action="uploadUrl"
           :headers="headers" 
           :on-success="onUploadSuccess" 
           :show-file-list="false"
+          accept=".pdf, .txt, .docx"
           class="upload-btn-wrapper"
         >
           <el-button type="primary" :icon="Plus" round>上传法规</el-button>
@@ -83,7 +84,25 @@
           </el-button>
         </div>
       </div>
+       <div class="admin-actions-grid">
+          <!-- 知识图谱构建 -->
+          <el-card class="admin-card">
+            <h3>图谱管理</h3>
+            <p>从最新 AI 回答中提取知识链路</p>
+            <el-button type="success" :icon="Share" @click="handleBuildGraph" :loading="loadingGraph">
+              更新知识图谱
+            </el-button>
+          </el-card>
 
+          <!-- 每日一练生成 -->
+          <el-card class="admin-card">
+            <h3>题库管理</h3>
+            <p>强制触发 AI 生成新的每日一练题目</p>
+            <el-button type="warning" :icon="Edit" @click="handleGenerateQuiz" :loading="loadingQuiz">
+              生成新题目
+            </el-button>
+          </el-card>
+        </div>
       <!-- 4. 底部状态栏 -->
       <footer class="admin-footer">
         <div class="stat-item">
@@ -100,12 +119,13 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed, nextTick } from 'vue';
-import { Plus, Collection, Delete, ArrowLeft, PieChart, Refresh } from '@element-plus/icons-vue';
+import {Plus, Collection, Delete, PieChart, Refresh, Share, Edit } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { HomeFilled } from '@element-plus/icons-vue';
 import request from '../api/request';
 import * as echarts from 'echarts';
-
+import { API_BASE_URL } from '../api/config';
+const uploadUrl = computed(() => `${API_BASE_URL}/v1/chat/upload`);
 // --- 类型接口定义 ---
 interface DocItem {
   id: number;
@@ -128,6 +148,8 @@ const hotTopics = ref<HotTopic[]>([]);
 const chartRef = ref<HTMLElement | null>(null);
 const analyzing = ref(false);
 const headers = { Authorization: `Bearer ${localStorage.getItem('access_token')}` };
+const loadingGraph = ref(false);
+const loadingQuiz = ref(false);
 
 // --- ECharts 初始化 ---
 const initChart = (data: { topic: string; count: number }[]) => {
@@ -201,6 +223,46 @@ const handleDelete = async (row: DocItem) => {
     ElMessage.success('删除成功');
     fetchDocs();
   } catch (e) {}
+};
+
+const handleBuildGraph = async () => {
+  loadingGraph.value = true;
+  
+  // 提示用户：任务已启动
+  ElMessage.info('图谱更新任务已在后台启动，处理约需 1-2 分钟...');
+  
+  try {
+    // 此时请求会瞬间返回
+    await request.post('/v1/chat/build_graph');
+    
+    // 你可以添加一个定时器，过一会刷新页面，或者让用户手动刷新
+    setTimeout(() => {
+        ElMessage.success('后台正在处理中，稍后请刷新页面查看变化');
+    }, 2000);
+    
+  } catch (e) { 
+    ElMessage.error('任务启动失败'); 
+  } finally {
+    loadingGraph.value = false;
+  }
+};
+
+const handleGenerateQuiz = async () => {
+  loadingQuiz.value = true;
+  
+  // 提前告诉用户已经在后台跑了
+  ElMessage.info('题库生成任务已在后台启动，处理约需 1-2 分钟...');
+  
+  try {
+    await request.post('/v1/quiz/admin_generate');
+    setTimeout(() => {
+        ElMessage.success('后台正在疯狂出题中，稍后可去刷题查看！');
+    }, 2000);
+  } catch (e) { 
+    ElMessage.error('生成任务启动失败'); 
+  } finally {
+    loadingQuiz.value = false;
+  }
 };
 
 // --- 辅助计算 ---

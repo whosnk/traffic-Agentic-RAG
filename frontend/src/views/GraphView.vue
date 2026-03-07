@@ -36,8 +36,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick, computed } from 'vue';
-import { Share, ArrowLeft, RefreshRight, Close,HomeFilled } from '@element-plus/icons-vue';
+import { ref, onMounted, onUnmounted, nextTick } from 'vue';
+import { Share, RefreshRight, Close,HomeFilled } from '@element-plus/icons-vue';
 import * as echarts from 'echarts';
 import request from '../api/request';
 

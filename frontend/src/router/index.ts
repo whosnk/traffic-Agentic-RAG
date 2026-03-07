@@ -6,6 +6,7 @@ import Admin from '../views/Admin.vue';
 import GraphView from '../views/GraphView.vue';
 import Landing from '../views/Landing.vue';
 import Quiz from '../views/Quiz.vue'; 
+import AiSettings from '../views/AiSettings.vue';
 const routes = [
   { 
     path: '/', 
@@ -44,6 +45,12 @@ const routes = [
     component: Quiz, 
     meta: { requiresAuth: true } 
   },
+  { 
+  path: '/ai-settings', 
+  name: 'AiSettings', 
+  component: AiSettings,
+  meta: { requiresAuth: true } 
+},
 ];
 
 const router = createRouter({

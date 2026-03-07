@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
 
 from app.db.session import SessionLocal
-from app.models import ChatSession, ChatMessage, User, HotTopic
+from app.models import ChatSession, ChatMessage, User, HotTopic, AIConfig
 from app.models.knowledge import KnowledgeDoc
 from app.services.analytics_service import AnalyticsService
 from app.services.graph_service import GraphService
@@ -48,8 +48,9 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = "default"
 
 
-def get_rag_service(db: Session = Depends(get_db)):
-    return RAGService(db)
+def get_rag_service(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return RAGService(db, current_user) # 注意 RAGService 接收了 user
+
 
 
 def save_chat_to_db(session_id: str, content: str, sources: str) -> int:
@@ -162,14 +163,28 @@ def get_history(session_id: str, db: Session = Depends(get_db), current_user: Us
         ChatMessage.created_at.asc()).all()
 
 
+
 @router.post("/upload")
-async def upload_knowledge_file(file: UploadFile = File(...), db: Session = Depends(get_db),
-                                service: RAGService = Depends(get_rag_service),
-                                current_user: User = Depends(get_current_user)):
-    count = service.ingest_pdf(file, file.filename)
-    db.add(KnowledgeDoc(filename=file.filename, chunk_count=count, upload_time=datetime.now()))
-    db.commit()
-    return {"status": "success"}
+async def upload_knowledge_file(
+        file: UploadFile = File(...),
+        db: Session = Depends(get_db),
+        service: RAGService = Depends(get_rag_service),
+        current_user: User = Depends(get_current_user)
+):
+    # 修改这里的校验逻辑
+    allowed_exts = ['pdf', 'txt', 'docx']
+    ext = file.filename.split('.')[-1].lower()
+    if ext not in allowed_exts:
+        raise HTTPException(status_code=400, detail=f"仅支持 {allowed_exts} 格式")
+
+    try:
+        count = service.ingest_knowledge(file, file.filename)
+        db.add(KnowledgeDoc(filename=file.filename, chunk_count=count, upload_time=datetime.now()))
+        db.commit()
+        return {"status": "success", "message": f"成功存入{count}条知识块"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @router.get("/knowledge_list")
@@ -237,23 +252,55 @@ def get_graph(db: Session = Depends(get_db)):
     gs = GraphService(None) # 仅查询不需要LLM
     return gs.get_full_graph(db)
 
+# 在 build_graph 内部定义一个后台任务处理函数
+async def run_graph_build(texts: list):
+    db = SessionLocal()  # 在后台任务内重新创建 Session
+    try:
+        # 1. 从数据库读取活跃配置
+        llm_cfg = db.query(AIConfig).filter(AIConfig.config_type == "llm", AIConfig.is_active == True).first()
+        if not llm_cfg:
+            logger.error("后台任务无法获取 LLM 配置")
+            return
+
+        # 2. 初始化 LLM
+        from langchain_openai import ChatOpenAI
+        llm = ChatOpenAI(
+            model=llm_cfg.model_name,
+            openai_api_key=llm_cfg.api_key,
+            openai_api_base=llm_cfg.base_url,
+            temperature=0
+        )
+
+        # 3. 执行图谱构建
+        from app.services.graph_service import GraphService
+        gs = GraphService(llm)
+        await gs.build_from_texts(db, texts)
+        logger.info("后台图谱构建任务完成")
+    except Exception as e:
+        logger.error(f"后台图谱任务异常: {e}")
+    finally:
+        db.close()
+
 
 @router.post("/build_graph")
-async def build_graph(db: Session = Depends(get_db), service: RAGService = Depends(get_rag_service)):
-    """从数据库已有的 AI 回答中提取知识图谱"""
-    # 提取最近的 10 条 AI 生成的专业回答作为图谱来源
+async def build_graph(
+        background_tasks: BackgroundTasks,
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user)
+):
+    if current_user.role != "admin":
+        raise HTTPException(403, "权限不足")
+
+    # 提取最近的 AI 回答
     msgs = db.query(ChatMessage).filter(ChatMessage.role == "ai").order_by(ChatMessage.created_at.desc()).limit(
         10).all()
+    texts = [m.content for m in msgs]
 
-    if not msgs:
-        # 如果没聊天记录，就给一段测试文本，确保图谱不是空的
-        texts = ["饮酒后驾驶机动车的，处暂扣六个月机动车驾驶证，并处一千元以上二千元以下罚款。"]
-    else:
-        texts = [m.content for m in msgs]
+    if not texts:
+        return {"status": "error", "message": "暂无 AI 回答数据可供提取"}
 
-    gs = GraphService(service.llm)
-    await gs.build_from_texts(db, texts)
-    return {"status": "success", "message": f"已从 {len(texts)} 条文本中提取并更新图谱"}
+    background_tasks.add_task(run_graph_build, texts)
+    return {"status": "processing", "message": "图谱更新任务已在后台启动"}
 
 
 @router.get("/stats")
@@ -346,3 +393,50 @@ def give_feedback(
     db.commit()
 
     return {"status": "success", "message": "感谢您的反馈！"}
+
+# 增加获取和保存个人 AI 设置的接口
+@router.get("/ai_settings")
+def get_ai_settings(current_user: User = Depends(get_current_user)):
+    """获取用户的 AI 偏好设置"""
+    # 默认配置结构
+    default_prefs = {
+        "llm_model": "deepseek-chat",
+        "llm_key": "",
+        "embed_model": "text-embedding-v4",
+        "embed_key": "",
+        "vision_model": "qwen-vl-max",
+        "vision_key": ""
+    }
+    user_prefs = current_user.ai_preferences or {}
+    # 合并默认值和用户值
+    return {**default_prefs, **user_prefs}
+
+@router.post("/ai_settings")
+def update_ai_settings(
+    prefs: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """保存用户的 AI 偏好设置"""
+    current_user.ai_preferences = prefs
+    db.commit()
+    return {"status": "success", "message": "AI 设置已保存生效"}
+
+
+@router.post("/warmup_cache")
+async def warmup_cache(
+    db: Session = Depends(get_db),
+    service: RAGService = Depends(get_rag_service)
+):
+    """
+    预热：分析热门话题并把答案存入缓存
+    """
+    topics = db.query(HotTopic).order_by(HotTopic.hit_count.desc()).limit(5).all()
+    count = 0
+    for t in topics:
+        for q in t.representative_queries:
+            # 执行一次检索并生成过程，触发缓存机制
+            # 这里调用 service.chat_stream 或者手动触发一次流程
+            await service.chat_stream(q)
+            count += 1
+    return {"status": "success", "warmed_up": count}
