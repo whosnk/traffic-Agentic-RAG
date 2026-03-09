@@ -1,29 +1,32 @@
-# app/services/rag_service.py 完整修复版
+# app/services/rag_service.py
 
-import httpx
 import json
 import logging
 import os
 import re
-import redis
 import shutil
 from typing import List
+
+import httpx
 import jieba
+# 引入更强的 PDF 解析器
+from langchain_community.document_loaders import PDFPlumberLoader, TextLoader, Docx2txtLoader
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+from langchain_core.messages import HumanMessage, ToolMessage, AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from rank_bm25 import BM25Okapi
 from sqlalchemy.orm import Session
-from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
+
 from app.core.config import settings
-from app.core.prompts import INTENT_DISPATCH_PROMPT, RAG_SYSTEM_PROMPT, QUERY_REWRITE_PROMPT
+from app.core.prompts import RAG_SYSTEM_PROMPT, QUERY_REWRITE_PROMPT,AGENT_SYSTEM_PROMP
 from app.models import User
 from app.models.knowledge import KnowledgeDoc
 from app.services.cache_service import CacheManager
 from app.services.config_service import ConfigService
-from app.services.tool_service import ToolService
+from app.services.tool_service import agent_get_route, agent_search_nearby, agent_get_weather
 
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 logger = logging.getLogger("RAGService")
@@ -52,35 +55,67 @@ class AliyunEmbeddingWrapper(Embeddings):
         return self.embed_documents([text])[0]
 
 
+# app/services/rag_service.py
+
 class AliyunReranker:
     def __init__(self, api_key, base_url):
         self.api_key = api_key
-        self.url = base_url.replace("/compatible-mode/v1", "/ranking/v1/rerank")
+        # 注意：Rerank 模型通常不需要 /compatible-mode/v1 这种路径，直接对接阿里云 Endpoint
+        # 如果你之前的 base_url 是兼容 OpenAI 的，这里可能需要硬编码阿里云的真实地址
+        # 或者保留你之前的逻辑，只要能通就行。通常阿里云 Rerank 地址如下：
+        self.url = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+        # 如果你的 base_url 已经是 dashscope.aliyuncs.com，保持原样即可
 
-    def rerank(self, query: str, documents: List[str]) -> List[int]:
-        payload = {"model": "text-rerank-v1", "query": query, "documents": documents, "top_n": 5}
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+    def rerank(self, query: str, documents: List[str], top_n: int = 10) -> List[dict]:
+        """
+        返回格式升级：不再只返回索引，而是返回 [{'index': 0, 'score': 0.85}, ...]
+        """
+        payload = {
+            "model": "gte-rerank",  # 或者 "text-rerank-v1" 视你的订阅而定
+            "input": {
+                "query": query,
+                "documents": documents
+            },
+            "parameters": {
+                "return_documents": False,
+                "top_n": top_n
+            }
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
         try:
-            resp = httpx.post(self.url, json=payload, headers=headers, timeout=10.0)
+            # 使用同步客户端，或者在该方法内创建 client
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.post(self.url, json=payload, headers=headers)
+
             if resp.status_code == 200:
-                results = resp.json()['results']
-                return [r['index'] for r in results]
-            return list(range(len(documents)))
-        except:
-            return list(range(len(documents)))
+                data = resp.json()
+                # 阿里云返回结构通常在 output.results 里
+                if "output" in data and "results" in data["output"]:
+                    return data["output"]["results"]  # [{'index': 0, 'relevance_score': 2.5}, ...]
+
+                # 兼容旧版或其他模型返回结构
+                return []
+            else:
+                print(f"Rerank API Error: {resp.text}")
+                return []
+        except Exception as e:
+            print(f"Rerank Exception: {e}")
+            return []
 
 
 class RAGService:
     def __init__(self, db: Session, current_user: User = None):
         self.db = db
-
-        # 1. 基础系统配置
         emb_cfg = ConfigService.get_active_config(db, "embedding")
         llm_cfg = ConfigService.get_active_config(db, "llm")
         if not emb_cfg or not llm_cfg:
-            raise Exception("AI 配置缺失，请在数据库中配置好模型")
+            raise Exception("AI 配置缺失")
 
-        # 2. 初始化 Redis (必须在 CacheManager 之前)
+        # 初始化 Redis
+        import redis
         try:
             self.redis_client = redis.Redis(
                 host=settings.REDIS_HOST,
@@ -91,19 +126,14 @@ class RAGService:
         except:
             self.redis_client = None
 
-        # --- 关键修复：补全 self.cache ---
         self.cache = CacheManager(self.redis_client)
 
-        # 3. 提取用户偏好 & 初始化模型 (你的原有逻辑保持不变)
-        user_prefs = {}
-        if current_user and current_user.ai_preferences:
-            user_prefs = current_user.ai_preferences
-
+        user_prefs = current_user.ai_preferences if (current_user and current_user.ai_preferences) else {}
         final_llm_model = user_prefs.get("llm_model") or llm_cfg.model_name
         final_llm_key = user_prefs.get("llm_key") or llm_cfg.api_key
         final_emb_model = user_prefs.get("embed_model") or emb_cfg.model_name
         final_emb_key = user_prefs.get("embed_key") or emb_cfg.api_key
-        llm_base_url = "https://api.deepseek.com" if "deepseek" in final_llm_model else "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        llm_base_url = "https://api.deepseek.com" if "deepseek" in final_llm_model else llm_cfg.base_url
 
         self.custom_embeddings = AliyunEmbeddingWrapper(final_emb_model, final_emb_key, emb_cfg.base_url)
         self.reranker = AliyunReranker(final_emb_key, emb_cfg.base_url)
@@ -123,7 +153,6 @@ class RAGService:
             temperature=0.5
         )
 
-        # 4. 初始化向量库
         self.index_path = os.path.abspath(os.path.join(settings.BASE_DIR, "data", "faiss_index"))
         self.vector_db = None
         if os.path.exists(os.path.join(self.index_path, "index.faiss")):
@@ -134,81 +163,74 @@ class RAGService:
         self.bm25_corpus = []
         self._init_bm25()
 
+    def strict_clean(self, text: str) -> str:
+        """强化清洗：专门针对国标文档的格式问题"""
+        if not text: return ""
+        # 1. 移除不可见字符
+        text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', text)
+        # 2. 合并多余空格
+        text = re.sub(r'\s+', ' ', text)
+        # 3. 【关键】修复被拆散的单位 (例如 "6 0 k m / h" -> "60km/h")
+        text = re.sub(r'(?<=\d)\s+(?=[a-zA-Z])', '', text)  # 修复数字和单位间的空格
+        text = re.sub(r'(?<=[a-zA-Z])\s+(?=/)', '', text)  # 修复单位斜杠
+        text = re.sub(r'(?<=/)\s+(?=[a-zA-Z])', '', text)
+        return text.strip()
+
     def _init_bm25(self):
-        """
-        优化后的 BM25 初始化：支持多格式解析并跳过损坏文件
-        """
         try:
             docs = self.db.query(KnowledgeDoc).all()
             upload_path = os.path.join(settings.BASE_DIR, "data", "uploads")
             all_texts = []
-
             for doc in docs:
                 path = os.path.join(upload_path, doc.filename)
-                if not os.path.exists(path):
-                    logger.warning(f"文件不存在，跳过: {path}")
-                    continue
+                if not os.path.exists(path): continue
 
                 try:
                     ext = doc.filename.split('.')[-1].lower()
-                    # 1. 动态选择加载器
                     if ext == 'pdf':
-                        loader = PyPDFLoader(path)
+                        loader = PDFPlumberLoader(path)  # 使用更强的 Loader
                     elif ext == 'txt':
                         loader = TextLoader(path, encoding='utf-8')
                     elif ext == 'docx':
                         loader = Docx2txtLoader(path)
                     else:
-                        logger.warning(f"未知格式，跳过: {ext}")
                         continue
 
-                    # 2. 加载与切分
                     pages = loader.load()
-                    text_splitter = RecursiveCharacterTextSplitter(chunk_size=450, chunk_overlap=100)
+                    # 加大切片，防止法条断裂
+                    text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=200)
                     splits = text_splitter.split_documents(pages)
 
-                    # 3. 清理文本并存入临时列表
                     for s in splits:
                         clean_t = self.strict_clean(s.page_content)
                         if len(clean_t) > 10:
                             all_texts.append(clean_t)
-
-                except Exception as inner_e:
-                    logger.error(f"处理文件 {doc.filename} 失败: {inner_e}")
+                except Exception as e:
+                    logger.error(f"BM25读取 {doc.filename} 失败: {e}")
                     continue
 
-            # 4. 构建 BM25 索引
             if all_texts:
                 self.bm25_corpus = all_texts
                 tokenized_corpus = [list(jieba.cut(text)) for text in all_texts]
                 self.bm25_instance = BM25Okapi(tokenized_corpus)
                 logger.info(f"BM25 索引构建完成，共 {len(all_texts)} 条片段")
-            else:
-                logger.warning("BM25 没有提取到任何有效文本，索引为空")
-
         except Exception as e:
-            logger.error(f"BM25 初始化总流程失败: {e}")
-
-    def strict_clean(self, text: str) -> str:
-        return re.sub(r'\s+', ' ', "".join(c for c in text if c.isprintable())).strip() if text else ""
+            logger.error(f"BM25 初始化失败: {e}")
 
     def ingest_knowledge(self, file_upload_object, filename: str) -> int:
-        print(f"\n🚀 [FAISS] 开始处理文档: {filename}")
-
-        # 1. 确保上传目录存在
+        print(f"\n🚀 [开始入库] 处理文档: {filename}")
         upload_path = os.path.join(settings.BASE_DIR, "data", "uploads")
         os.makedirs(upload_path, exist_ok=True)
         file_save_path = os.path.join(upload_path, filename)
 
-        # 2. 保存文件
         with open(file_save_path, "wb") as buffer:
             shutil.copyfileobj(file_upload_object.file, buffer)
 
-        # 3. 根据后缀选择加载器
         ext = filename.split('.')[-1].lower()
         try:
             if ext == 'pdf':
-                loader = PyPDFLoader(file_save_path)
+                # 【核心修改】使用 PDFPlumberLoader
+                loader = PDFPlumberLoader(file_save_path)
             elif ext == 'txt':
                 loader = TextLoader(file_save_path, encoding='utf-8')
             elif ext == 'docx':
@@ -218,22 +240,21 @@ class RAGService:
 
             documents = loader.load()
         except Exception as e:
-            logger.error(f"加载文件 {filename} 失败: {e}")
+            logger.error(f"文件加载失败: {e}")
             raise Exception(f"文件解析失败: {str(e)}")
 
-        # 4. 切分与清理
+        # 【核心修改】加大 Chunk Size，防止法条被切断
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=450, chunk_overlap=100,
+            chunk_size=800,
+            chunk_overlap=200,
             separators=["\n\n", "\n", "。", "；", " ", ""]
         )
         splits = text_splitter.split_documents(documents)
         valid_texts = [self.strict_clean(doc.page_content) for doc in splits if
                        len(self.strict_clean(doc.page_content)) > 10]
 
-        if not valid_texts:
-            raise Exception("文件解析后没有提取到有效文本")
+        if not valid_texts: raise Exception("未提取到有效文本")
 
-        # 5. 更新索引
         if self.vector_db is None:
             self.vector_db = FAISS.from_texts(valid_texts, self.custom_embeddings)
         else:
@@ -244,120 +265,238 @@ class RAGService:
         return len(valid_texts)
 
     async def chat_stream(self, query: str, session_id: str = "default"):
-        """异步流式问答生成器"""
-        print(f"\n{'=' * 10} [流式请求] 用户提问: {query} {'=' * 10}")
-        # 1. 预处理
+        print(f"\n{'=' * 10} [提问] {query} {'=' * 10}")
         query = self.strict_clean(query)
-        q_vec = self.custom_embeddings.embed_query(query)  # 提前计算向量，用于语义缓存
-        history_key = f"chat_history:{session_id}"
-        history_list = []
-        if self.redis_client:
-            raw = self.redis_client.get(history_key)
-            if raw: history_list = json.loads(raw)[-16:]
+        q_vec = self.custom_embeddings.embed_query(query)
 
-        # 2. 语义缓存检查
+        # 1. 语义缓存检查
         cached_ans, cached_src = self.cache.get_semantic_cache(q_vec)
-        if cached_ans is not None:
-            print(f"⚡ [命中缓存] 语义相似度匹配成功!")
+        if cached_ans:
+            print("⚡ [缓存命中] 直接返回历史答案")
             yield json.dumps({"type": "sources", "data": cached_src})
             yield json.dumps({"type": "content", "data": cached_ans})
-            # 保存到历史
-            if self.redis_client:
-                history_list.extend([f"用户: {query}", f"助手: {cached_ans}"])
-                self.redis_client.setex(history_key, 3600, json.dumps(history_list[-16:]))
             yield json.dumps({"type": "done", "full_answer": cached_ans})
             return
 
         if not self.vector_db:
-            print("❌ 错误: 知识库未初始化")
             yield json.dumps({"type": "error", "data": "知识库为空"})
             return
 
-        # 3. 查询改写 (Query Rewrite)
+        # 2. 获取历史记录并构建 Context (关键！)
+        history_key = f"chat_history:{session_id}"
+        chat_history_objs = [] # 用于给 Agent 的上下文对象列表
+        history_str_for_rewrite = ""
+
+        if self.redis_client:
+            raw = self.redis_client.get(history_key)
+            if raw:
+                raw_list = json.loads(raw)[-6:] # 取最近6条
+                history_str_for_rewrite = "\n".join([f"{'用户' if i % 2 == 0 else '助手'}: {msg}" for i, msg in enumerate(raw_list)])
+
+                # 【关键】将历史记录转化为 LangChain Message 对象
+                for i, msg in enumerate(raw_list):
+                    if i % 2 == 0:
+                        chat_history_objs.append(HumanMessage(content=msg))
+                    else:
+                        chat_history_objs.append(AIMessage(content=msg))
+
+        # 2. 查询改写 (Query Rewriting)
+        history_key = f"chat_history:{session_id}"
+        history_list =[]
+        if self.redis_client:
+            raw = self.redis_client.get(history_key)
+            if raw: history_list = json.loads(raw)[-6:]  # 取最近6条
+
         search_query = query
         if history_list:
-            history_str = "\n".join(
-                [f"{'用户' if i % 2 == 0 else '助手'}: {msg}" for i, msg in enumerate(history_list[-4:])])
-            rewrite_prompt = QUERY_REWRITE_PROMPT.format(history=history_str, query=query)
+            history_str = "\n".join([f"{'用户' if i % 2 == 0 else '助手'}: {msg}" for i, msg in enumerate(history_list)])
             try:
-                rewrite_res = self.rewriter_llm.invoke(rewrite_prompt)
+                # 快速改写，不流式输出
+                rewrite_res = self.rewriter_llm.invoke(QUERY_REWRITE_PROMPT.format(history=history_str, query=query))
                 search_query = rewrite_res.content.strip().replace('"', '')
-                print(f"🔍 [上下文改写] 检索词变为: '{search_query}'")
-            except Exception as e:
-                print(f"⚠️ 查询改写失败: {e}")
+                print(f"🔍 [改写后] {search_query}")
+            except:
+                pass
 
-        # 4. 意图分拣
+        # 3. 意图识别与工具调用 (Tool Calling)
         try:
-            intent_res = self.rewriter_llm.invoke(INTENT_DISPATCH_PROMPT.format(query=search_query))
-            match = re.search(r'\{.*\}', intent_res.content, re.DOTALL)
-            if match:
-                intent_obj = json.loads(match.group())
-                if intent_obj.get("intent") == "NAVIGATION":
-                    p = intent_obj.get("params", {})
-                    print(f"🗺️ [意图识别] 命中导航: {p.get('from')} -> {p.get('to')}")
-                    yield json.dumps({"type": "content", "data": f"🔄 **正在规划{p.get('mode', '驾车')}路线...**\n\n"})
-                    route_info = await ToolService.get_route_plan(p.get('from'), p.get('to'), p.get('mode', 'driving'))
-                    yield json.dumps({"type": "content", "data": route_info})
-                    yield json.dumps({"type": "done"})
-                    return
-        except Exception as e:
-            print(f"⚠️ 意图识别跳过: {e}")
+            print("🤖 [Agent] 正在思考...")
 
-        # 5. 混合检索与精排
-        print("📡 [检索中] 正在执行混合检索...")
-        faiss_docs = self.vector_db.similarity_search(search_query, k=10)
-        bm25_docs = []
-        if self.bm25_instance and self.bm25_corpus:
-            scores = self.bm25_instance.get_scores(list(jieba.cut(search_query)))
-            top_n = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:5]
+            # 定义 System Prompt，强行压制模型输出 XML 标签
+            agent_system_prompt = SystemMessage(content="""
+            你是一个集成了高德地图能力的智能交通助手。
+            
+            【核心指令】
+            1. 当用户询问路线、地点、天气时，**必须**调用工具。
+            2. 工具调用完成后，请根据工具返回的数据，用**自然语言**生成一段温馨、有用的建议。
+            3. **严禁**输出任何 XML标签、JSON代码块或 `< | DSML | ... >` 这样的调试信息。只输出给用户看的最终文字。
+            4. 如果工具返回了图片链接，请不要在回答中重复生成该链接，以免图片显示两次。
+            """)
+
+            tools = [agent_get_route, agent_search_nearby, agent_get_weather]
+            llm_with_tools = self.rewriter_llm.bind_tools(tools)
+
+            messages_for_agent = [agent_system_prompt] + chat_history_objs + [HumanMessage(content=search_query)]
+
+            agent_msg = llm_with_tools.invoke(messages_for_agent)
+
+            if agent_msg.tool_calls:
+                print(f"🛠️ [Agent] 命中工具: {[t['name'] for t in agent_msg.tool_calls]}")
+                messages_for_agent.append(agent_msg)
+
+                for tool_call in agent_msg.tool_calls:
+                    tool_name = tool_call["name"]
+                    tool_args = tool_call["args"]
+
+                    # 给前端发送状态
+                    status_text = ""
+                    if "route" in tool_name: status_text = "🔄 **正在规划出行方案...**\n\n"
+                    elif "nearby" in tool_name: status_text = "🔄 **正在搜索周边设施...**\n\n"
+                    elif "weather" in tool_name: status_text = "🔄 **正在查询实时天气...**\n\n"
+
+                    yield json.dumps({"type": "content", "data": status_text})
+
+                    # 执行工具
+                    selected_tool = next(t for t in tools if t.name == tool_name)
+                    try:
+                        tool_result = await selected_tool.ainvoke(tool_args)
+                    except Exception as tool_err:
+                        tool_result = f"工具调用失败: {str(tool_err)}"
+
+                    # 将工具结果加入历史
+                    messages_for_agent.append(ToolMessage(content=str(tool_result), tool_call_id=tool_call["id"]))
+
+                    # 💡 关键优化：如果工具返回了 Markdown 图片，我们已经通过上面的 yield 发给前端渲染了
+                    # 为了防止大模型在总结时又把图片链接复述一遍（导致裂图或重复），我们在喂给大模型前，把 URL 稍微“打码”一下
+                    # 或者依靠 System Prompt 指令（第4条）
+
+                # 6. 生成最终回答 (带清洗过滤器)
+                print("🤖 [Agent] 生成综合建议...")
+                full_answer = ""
+
+                # 重新流式调用 LLM 生成总结
+                async for chunk in self.llm.astream(messages_for_agent):
+                    content = chunk.content
+                    if content:
+                        # 🔥🔥🔥 【核心修复】 过滤阿里模型的 DSML 脏数据 🔥🔥🔥
+                        # 只要包含这些特征字符，直接跳过不发送给前端
+                        if "< | DSML" in content or "function_calls" in content or "| >" in content:
+                            continue
+
+                        # 简单的清洗，防止多余的换行
+                        full_answer += content
+                        yield json.dumps({"type": "content", "data": content}, ensure_ascii=False)
+
+                yield json.dumps({"type": "done", "full_answer": full_answer})
+                return
+            else:
+                print("🧠 [Agent] 未命中工具，转入法规库检索...")
+
+        except Exception as e:
+            print(f"⚠️ Agent 调度异常: {e}")
+
+        # 4. 混合检索 (暴力扩大范围，确保查得全)
+        print("📡 [混合检索] 执行中...")
+
+        # 4.1 向量检索：扩大到 Top 40
+        faiss_docs = self.vector_db.similarity_search(search_query, k=40)
+
+        # 4.2 关键词检索：扩大到 Top 20
+        bm25_docs =[]
+        if self.bm25_instance:
+            tokenized_query = list(jieba.cut(search_query))
+            scores = self.bm25_instance.get_scores(tokenized_query)
+            top_n = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:20]
             bm25_docs = [Document(page_content=self.bm25_corpus[i]) for i in top_n if scores[i] > 0]
 
-        candidates = list(set([d.page_content for d in (faiss_docs + bm25_docs)]))
-        print(f"🎯 [Rerank] 正在精排 {len(candidates)} 个候选片段...")
-        try:
-            ranked_indices = self.reranker.rerank(search_query, candidates)
-            final_docs = [candidates[i] for i in ranked_indices[:5]]
-        except:
-            final_docs = candidates[:5]
+        # 4.3 合并去重
+        candidates = {}
+        for d in faiss_docs + bm25_docs:
+            if d.page_content not in candidates:
+                candidates[d.page_content] = d.page_content
 
+        candidate_list = list(candidates.values())
+        print(f"🎯[Rerank] 正在对 {len(candidate_list)} 个片段进行精排...")
+
+        # 5. 重排序与防幻觉截断 (Anti-Hallucination)
+        # 这里设置为 0.05 是一个平衡值，既能拦住完全不相关的噪音，又能放过字面上有一定关联的法条
+        SCORE_THRESHOLD = 0.05
+
+        final_docs =[]
+
+        try:
+            # 获取带分数的排序结果
+            rerank_results = self.reranker.rerank(search_query, candidate_list, top_n=10)
+
+            for res in rerank_results:
+                score = res.get('relevance_score', -100)
+                idx = res.get('index')
+
+                # 如果片段与问题相关度太低，直接丢弃
+                if score < SCORE_THRESHOLD:
+                    continue
+
+                final_docs.append(candidate_list[idx])
+
+        except Exception as e:
+            print(f"Rerank 异常 (降级为普通截取): {e}")
+            final_docs = candidate_list[:5]
+
+        # 6. 最终判定：如果没有合格的文档，直接拒答
         if not final_docs:
-            print("❌ [检索结果] 为空")
-            yield json.dumps({"type": "content", "data": "抱歉，知识库暂无相关法律条款。"})
-            yield json.dumps({"type": "done"})
+            print("❌ [防幻觉] 所有片段得分均低于阈值，判定为知识库无相关内容。")
+            fallback_msg = "抱歉，根据目前的知识库，未找到与您描述完全匹配的交通法规条款。建议您提供更详细的关键词，或咨询当地交管部门。"
+            yield json.dumps({"type": "content", "data": fallback_msg})
+            yield json.dumps({"type": "done", "full_answer": fallback_msg})
             return
 
-        sources = final_docs
-        yield json.dumps({"type": "sources", "data": sources})
+        yield json.dumps({"type": "sources", "data": final_docs})
 
-        # 6. 图谱增强
-        from app.services.graph_service import GraphService
-        graph_data = GraphService(self.llm).get_full_graph(self.db)
-        relevant_triples = [f"{link['source']} -{link['value']}-> {link['target']}"
-                            for link in graph_data['links']
-                            if any(k in link['source'] or k in link['target'] for k in jieba.cut(search_query))]
-        graph_context = "\n".join(relevant_triples) if relevant_triples else "无相关逻辑关联。"
+        # 7. 知识图谱增强 (Knowledge Graph Integration)
+        print("🕸️ [知识图谱] 正在提取逻辑链...")
+        try:
+            from app.services.graph_service import GraphService
+            graph_data = GraphService(self.llm).get_full_graph(self.db)
 
-        context = "\n".join([f"[资料]: {d}" for d in final_docs])
-        final_prompt = RAG_SYSTEM_PROMPT.format(context=context, history="\n".join(history_list),
-                                                query=query) + f"\n\n【交通法规逻辑图谱关系链】:\n{graph_context}"
+            # 使用 jieba 分词对问题进行关键词提取，去图谱里撞库
+            relevant_triples = [
+                f"{link['source']} -{link['value']}-> {link['target']}"
+                for link in graph_data['links']
+                if any(k in link['source'] or k in link['target'] for k in jieba.cut(search_query))
+            ]
+            graph_context = "\n".join(relevant_triples) if relevant_triples else "暂无图谱逻辑关联"
+        except Exception as e:
+            print(f"知识图谱提取异常: {e}")
+            graph_context = "暂无图谱逻辑关联"
 
-        # 7. 生成回复
-        print("🤖 [AI推理] 开始生成回答...")
+        # 8. 拼装 Prompt 并生成最终流式回答
+        context = "\n".join([f"[资料{i + 1}]: {d}" for i, d in enumerate(final_docs)])
+
+        # 组装最终提示词
+        final_prompt = RAG_SYSTEM_PROMPT.format(
+            context=context,
+            graph_context=graph_context,
+            history="\n".join(history_list),
+            query=query
+        )
+
         full_answer = ""
         try:
+            print("🤖 [AI生成] 开始流式输出...")
             async for chunk in self.llm.astream(final_prompt):
                 if chunk.content:
                     full_answer += chunk.content
                     yield json.dumps({"type": "content", "data": chunk.content}, ensure_ascii=False)
 
-            # 8. 存入语义缓存与历史
-            self.cache.set_semantic_cache(q_vec, full_answer, sources)
+            # 存入语义缓存
+            self.cache.set_semantic_cache(q_vec, full_answer, final_docs)
+            # 存入历史会话 (保留最近16条用于上下文改写)
             if self.redis_client:
                 history_list.extend([f"用户: {query}", f"助手: {full_answer}"])
                 self.redis_client.setex(history_key, 3600, json.dumps(history_list[-16:]))
 
-            print(f"✅ [流程结束] 回答生成成功\n{'-' * 60}")
             yield json.dumps({"type": "done", "full_answer": full_answer})
+
         except Exception as e:
-            print(f"❌ [错误] 生成异常: {e}")
+            print(f"❌ 生成异常: {e}")
             yield json.dumps({"type": "error", "data": str(e)})
