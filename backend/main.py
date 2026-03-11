@@ -1,5 +1,7 @@
 import os
-
+# 强行关闭 HuggingFace 的符号链接功能，解决 WinError 1314 报错
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles

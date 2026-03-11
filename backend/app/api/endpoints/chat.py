@@ -163,7 +163,6 @@ def get_history(session_id: str, db: Session = Depends(get_db), current_user: Us
         ChatMessage.created_at.asc()).all()
 
 
-
 @router.post("/upload")
 async def upload_knowledge_file(
         file: UploadFile = File(...),
@@ -171,18 +170,31 @@ async def upload_knowledge_file(
         service: RAGService = Depends(get_rag_service),
         current_user: User = Depends(get_current_user)
 ):
-    # 修改这里的校验逻辑
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可上传知识库")
+
     allowed_exts = ['pdf', 'txt', 'docx']
     ext = file.filename.split('.')[-1].lower()
     if ext not in allowed_exts:
         raise HTTPException(status_code=400, detail=f"仅支持 {allowed_exts} 格式")
 
     try:
-        count = service.ingest_knowledge(file, file.filename)
-        db.add(KnowledgeDoc(filename=file.filename, chunk_count=count, upload_time=datetime.now()))
+        # 1. 调用高级解析管线，返回的是解析并富化后的字符串列表
+        valid_texts = service.ingest_knowledge(file, file.filename)
+
+        # 2. 将解析好的文本列表直接存入 MySQL
+        new_doc = KnowledgeDoc(
+            filename=file.filename,
+            chunk_count=len(valid_texts),
+            parsed_content=valid_texts,  # 存入新增的字段
+            upload_time=datetime.now()
+        )
+        db.add(new_doc)
         db.commit()
-        return {"status": "success", "message": f"成功存入{count}条知识块"}
+
+        return {"status": "success", "message": f"成功解析并存入 {len(valid_texts)} 条高质量语义块"}
     except Exception as e:
+        logger.error(f"上传失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

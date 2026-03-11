@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, JSON
 
 from app.db.base import Base
 
@@ -18,4 +18,5 @@ class KnowledgeDoc(Base):
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String(255))
     chunk_count = Column(Integer)
+    parsed_content = Column(JSON, nullable=True)
     upload_time = Column(DateTime, default=datetime.now)
