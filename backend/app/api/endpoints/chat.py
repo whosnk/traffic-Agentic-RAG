@@ -18,9 +18,6 @@ from app.core.constants import GraphConstants
 from app.db.session import SessionLocal
 from app.models import ChatSession, ChatMessage, User, HotTopic, AIConfig
 from app.models.knowledge import KnowledgeDoc
-from app.services.analytics_service import AnalyticsService
-from app.services.graph_service import GraphService
-from app.services.rag_service import RAGService
 from app.core.security import SECRET_KEY, ALGORITHM, verify_password, get_password_hash
 from pydantic import BaseModel
 
@@ -54,6 +51,7 @@ class ChatRequest(BaseModel):
 
 
 def get_rag_service(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.services.rag_service import RAGService
     return RAGService(db, current_user) # 注意 RAGService 接收了 user
 
 
@@ -90,7 +88,7 @@ async def ask_question_stream(
         request: ChatRequest,
         # background_tasks: BackgroundTasks, # 这里不再需要 BackgroundTasks 来存 AI 消息了
         db: Session = Depends(get_db),
-        service: RAGService = Depends(get_rag_service),
+        service=Depends(get_rag_service),
         current_user: User = Depends(get_current_user)
 ):
     # 1. 会话持久化 (保持不变)
@@ -213,7 +211,7 @@ async def upload_knowledge_file(
         background_tasks: BackgroundTasks,  # 引入后台任务队列
         file: UploadFile = File(...),
         db: Session = Depends(get_db),
-        service: RAGService = Depends(get_rag_service),
+        service=Depends(get_rag_service),
         current_user: User = Depends(get_current_user)
 ):
     if current_user.role != "admin":
@@ -296,7 +294,7 @@ def delete_session(session_id: str, db: Session = Depends(get_db), current_user:
 @router.get("/analytics")
 def get_analytics(
         db: Session = Depends(get_db),
-        service: RAGService = Depends(get_rag_service),
+        service=Depends(get_rag_service),
         current_user: User = Depends(get_current_user)
 ):
     """获取已存在的分析结果"""
@@ -310,7 +308,7 @@ def get_analytics(
 @router.post("/perform_analysis")
 async def perform_analysis(
         db: Session = Depends(get_db),
-        service: RAGService = Depends(get_rag_service),
+        service=Depends(get_rag_service),
         current_user: User = Depends(get_current_user)
 ):
     """手动触发 AI 聚类分析引擎"""
@@ -319,6 +317,7 @@ async def perform_analysis(
 
     try:
         # --- 关键修复：传入 service.custom_embeddings 和 service.llm ---
+        from app.services.analytics_service import AnalyticsService
         analyzer = AnalyticsService(service.custom_embeddings, service.llm)
 
         # 执行深度分析
@@ -333,6 +332,7 @@ async def perform_analysis(
 @router.get("/knowledge_graph")
 def get_graph(db: Session = Depends(get_db)):
     """获取图谱数据"""
+    from app.services.graph_service import GraphService
     gs = GraphService(None) # 仅查询不需要LLM
     return gs.get_full_graph(db)
 
@@ -526,7 +526,7 @@ def update_ai_settings(
 @router.post("/warmup_cache")
 async def warmup_cache(
     db: Session = Depends(get_db),
-    service: RAGService = Depends(get_rag_service)
+    service=Depends(get_rag_service)
 ):
     """
     预热：分析热门话题并把答案存入缓存

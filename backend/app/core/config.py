@@ -13,11 +13,12 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Traffic QA System"
 
     # --- 数据库配置 ---
-    MYSQL_USER: str
-    MYSQL_PASSWORD: str
-    MYSQL_HOST: str
-    MYSQL_PORT: int
-    MYSQL_DB: str
+    SQLITE_URL: str = ""
+    MYSQL_USER: str = ""
+    MYSQL_PASSWORD: str = ""
+    MYSQL_HOST: str = "127.0.0.1"
+    MYSQL_PORT: int = 3306
+    MYSQL_DB: str = ""
 
     # --- AI 配置 (作为可选，因为我们现在改用数据库存了) ---
     OPENAI_API_KEY: Optional[str] = None
@@ -30,7 +31,9 @@ class Settings(BaseSettings):
     AMAP_KEY: Optional[str] = None
 
     @property
-    def SQLALCHEMY_DATABASE_URI(self) -> str:
+    def SQLALCHEMY_DATABASE_URI(self):
+        if self.SQLITE_URL:
+            return self.SQLITE_URL
         return (
             f"mysql+pymysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}"
             f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DB}"

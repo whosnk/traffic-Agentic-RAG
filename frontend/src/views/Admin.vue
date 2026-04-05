@@ -113,7 +113,7 @@
                   <thead><tr><th>排名</th><th>用户名</th><th>提问数</th></tr></thead>
                   <tbody>
                     <tr v-for="(u, idx) in dashStats.top_users" :key="idx">
-                      <td><span class="tag tag-primary">{{ idx + 1 }}</span></td>
+                      <td><span class="tag tag-primary">{{ Number(idx) + 1 }}</span></td>
                       <td>{{ u.username }}</td>
                       <td>{{ u.count }}</td>
                     </tr>
@@ -256,7 +256,7 @@
                     <span v-else class="tag tag-warning">已封禁</span>
                   </td>
                   <td>
-                    <el-dropdown @command="(cmd) => handleUserAction(cmd, u)">
+                    <el-dropdown @command="(cmd: string) => handleUserAction(cmd, u)">
                       <el-button size="small" type="primary" plain>
                         管理 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
                       </el-button>
@@ -344,7 +344,7 @@ import { ref, onMounted, nextTick, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { 
   Guide, DataLine, Cpu, Collection, PieChart, User, Monitor, HomeFilled, 
-  Bell, Plus, Delete, Loading, Refresh, Edit, Share, ArrowDown 
+  Bell, Plus, Loading, Refresh, Edit, Share, ArrowDown 
 } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import * as echarts from 'echarts';
@@ -364,7 +364,7 @@ const currentUser = ref({ username: '', avatar: '' });
 
 // --- 页面状态 ---
 const activePage = ref('dashboard');
-const dashStats = ref({ metrics: {} as any, chart: {} as any, top_users: [] });
+const dashStats = ref<any>({ metrics: {}, chart: {}, top_users: [] });
 const aiConfigs = ref<any[]>([]);
 const docs = ref<any[]>([]);
 const hotTopics = ref<any[]>([]);

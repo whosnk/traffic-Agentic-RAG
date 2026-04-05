@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.expression import func
 from app.db.session import SessionLocal
-from app.api.endpoints.chat import get_current_user, get_rag_service
+from app.api.endpoints.chat import get_current_user
 from app.services.quiz_service import QuizService
 from app.models import User, Question, UserQuizRecord
 from app.models.config import AIConfig
@@ -69,7 +69,6 @@ async def run_quiz_generation(count: int = 10):
 async def get_daily_quiz(
         background_tasks: BackgroundTasks,  # 引入后台任务
         db: Session = Depends(get_db),
-        service=Depends(get_rag_service),
         current_user: User = Depends(get_current_user)
 ):
     """获取题目：优先给没做过的新题，不够则后台补题"""
