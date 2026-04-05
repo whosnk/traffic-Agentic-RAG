@@ -1,0 +1,12 @@
+/.idea/
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+backend/.env
+backend/traffic_agent.db
+backend/*.log
+frontend/*.log
+frontend/node_modules/
+frontend/dist/
