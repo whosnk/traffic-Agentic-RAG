@@ -55,6 +55,11 @@ def get_rag_service(db: Session = Depends(get_db), current_user: User = Depends(
     return RAGService(db, current_user) # 注意 RAGService 接收了 user
 
 
+def get_chat_service(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.services.agent_service import AgentService
+    return AgentService(db, current_user)
+
+
 
 def save_chat_to_db(session_id: str, content: str, sources: str) -> int:
     """同步保存聊天记录并返回消息ID"""
@@ -88,7 +93,7 @@ async def ask_question_stream(
         request: ChatRequest,
         # background_tasks: BackgroundTasks, # 这里不再需要 BackgroundTasks 来存 AI 消息了
         db: Session = Depends(get_db),
-        service=Depends(get_rag_service),
+        service=Depends(get_chat_service),
         current_user: User = Depends(get_current_user)
 ):
     # 1. 会话持久化 (保持不变)
