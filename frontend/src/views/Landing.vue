@@ -7,46 +7,38 @@
     <div class="content-box">
       <header class="hero-section">
         <div class="logo-circle">🚗</div>
-        <h1>ITQA 探索中心</h1>
-        <p>请选择您要使用的功能模块</p>
+        <h1>交通决策治理智能体</h1>
+        <p>通过自然语言交互完成交通诊断、拥堵体检、方案生成与结果展示</p>
       </header>
 
       <!-- 功能导航网格：响应式适配 -->
       <div class="nav-grid">
-        <!-- 1. AI 问答 -->
+        <!-- 1. 交通治理助手 -->
         <div class="nav-card" @click="$router.push('/chat')">
           <div class="card-icon chat-icon"><el-icon><ChatLineRound /></el-icon></div>
           <div class="card-body">
-            <h3>AI 法律助手</h3>
-            <p>基于真实法条提供专业精准建议</p>
+            <h3>交通治理助手</h3>
+            <p>基于自然语言完成交通问题分析、治理问答与任务分解</p>
           </div>
           <el-icon class="arrow"><ArrowRight /></el-icon>
         </div>
 
-        <!-- 2. 知识图谱 -->
-        <div class="nav-card" @click="$router.push('/graph')">
+        <!-- 2. 城市拥堵体检 -->
+        <div class="nav-card" @click="$router.push('/chat')">
           <div class="card-icon graph-icon"><el-icon><Share /></el-icon></div>
           <div class="card-body">
-            <h3>法律知识图谱</h3>
-            <p>可视化呈现法律实体关联</p>
+            <h3>城市拥堵体检</h3>
+            <p>面向区域路网运行状态生成体检报告与重点问题识别</p>
           </div>
           <el-icon class="arrow"><ArrowRight /></el-icon>
         </div>
-        <!-- 5. 每日一练 (新功能) -->
-<div class="nav-card" @click="$router.push('/quiz')">
-  <div class="card-icon quiz-icon"><el-icon><Edit /></el-icon></div>
-  <div class="card-body">
-    <h3>每日一练</h3>
-    <p>AI 智能出题，通过答题巩固交通法规知识。</p>
-  </div>
-  <el-icon class="arrow"><ArrowRight /></el-icon>
-</div>
-        <!-- 3. 管理后台 (仅管理员可见) -->
-        <div v-if="userRole === 'admin'" class="nav-card admin-card" @click="$router.push('/admin')">
-          <div class="card-icon admin-icon"><el-icon><Monitor /></el-icon></div>
+
+        <!-- 3. 仿真推演评估 -->
+        <div class="nav-card" @click="$router.push('/chat')">
+          <div class="card-icon quiz-icon"><el-icon><Edit /></el-icon></div>
           <div class="card-body">
-            <h3>管理控制台</h3>
-            <p>维护知识库与热点话题分析</p>
+            <h3>仿真推演评估</h3>
+            <p>对候选治理策略进行情景推演与效果展示</p>
           </div>
           <el-icon class="arrow"><ArrowRight /></el-icon>
         </div>
@@ -56,7 +48,7 @@
           <div class="card-icon profile-icon"><el-icon><User /></el-icon></div>
           <div class="card-body">
             <h3>个人中心</h3>
-            <p>账户设置、统计与安全管理</p>
+            <p>账户设置、模型偏好与平台使用管理</p>
           </div>
           <el-icon class="arrow"><ArrowRight /></el-icon>
         </div>
@@ -71,20 +63,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { ChatLineRound, Share, Monitor, User, ArrowRight, SwitchButton, Edit } from '@element-plus/icons-vue';
-import request from '../api/request';
+import { ChatLineRound, Share, User, ArrowRight, SwitchButton, Edit } from '@element-plus/icons-vue';
 
 const router = useRouter();
-const userRole = ref('');
-
-onMounted(async () => {
-  try {
-    const res = await request.get('/v1/chat/me');
-    userRole.value = res.data.role;
-  } catch (e) {}
-});
 
 const handleLogout = () => {
   localStorage.clear();
@@ -137,7 +119,6 @@ const handleLogout = () => {
     display: flex; align-items: center; justify-content: center; font-size: 24px;
     &.chat-icon { background: #e6f1fc; color: #409eff; }
     &.graph-icon { background: #f0f9eb; color: #67c23a; }
-    &.admin-icon { background: #fdf6ec; color: #e6a23c; }
     &.profile-icon { background: #f4f4f5; color: #909399; }
     &.quiz-icon { background: #fdf5e6; color: #ff9800; }
   }
