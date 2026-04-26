@@ -108,17 +108,18 @@
           <div v-if="chatHistory.length === 0" class="welcome-hero">
             <div class="hero-content">
               <div class="icon-circle">🚗</div>
-              <h1>您好，我是交通法助手</h1>
+              <h1>您好，我是交通治理决策智能体</h1>
               <div class="suggestion-grid">
-                <div class="suggest-card" @click="quickStart('饮酒驾驶如何处罚？')">🍺 酒驾处罚标准</div>
-                <div class="suggest-card" @click="quickStart('交通事故处理流程')">🚑 事故处理流程</div>
-                <div class="suggest-card" @click="quickStart('从南京南站到夫子庙怎么走')">🗺️ 路径规划</div>
+                <div class="suggest-card" @click="quickStart('请分析今天主城区的拥堵情况')">📊 主城区拥堵分析</div>
+                <div class="suggest-card" @click="quickStart('早高峰主要拥堵原因是什么')">🚦 高峰成因诊断</div>
+                <div class="suggest-card" @click="quickStart('请生成一份城市拥堵体检结果')">🩺 城市拥堵体检</div>
+                <div class="suggest-card" @click="quickStart('给出初步交通治理建议')">🧭 治理建议生成</div>
               </div>
             </div>
           </div>
 
           <!-- 对话消息 -->
-          <div v-for="(msg, index) in chatHistory" :key="index" :class="['msg-row', msg.role === 'user' ? 'is-user' : 'is-ai']">
+          <div v-for="(msg, index) in chatHistory" :key="index" :class="['msg-row', msg.role === 'user' ? 'is-user' : 'is-ai', isToolReportMessage(msg) ? 'has-tool-report' : '']">
             <div class="msg-bubble">
               <div class="markdown-body" v-html="renderMarkdown(msg.content)"></div>
               
@@ -148,13 +149,13 @@
                 <div v-if="msg.sources?.length" class="source-tag">
                   <el-popover 
                     placement="top-start" 
-                    title="法律依据原文" 
+                    title="参考信息" 
                     :width="450" 
                     trigger="click"
                     popper-class="legal-source-popper"
                   >
                     <template #reference>
-                      <span class="src-link"><el-icon><Document /></el-icon> 引用依据</span>
+                      <span class="src-link"><el-icon><Document /></el-icon> 参考内容</span>
                     </template>
                     <div class="source-scroll-container">
   <div v-for="(s, i) in msg.sources" :key="i" class="src-item-card">
@@ -188,7 +189,7 @@
             />
             <el-input 
               v-model="inputQuery" 
-              placeholder="输入交通法相关问题..." 
+              placeholder="请输入交通运行分析、拥堵体检或治理决策问题..." 
               type="textarea" 
               :autosize="{ minRows: 1, maxRows: 5 }" 
               resize="none" 
@@ -317,14 +318,9 @@ onMounted(async () => {
     const [userRes, sessRes] = await Promise.all([request.get('/v1/chat/me'), request.get('/v1/chat/sessions')]);
     currentUser.value = userRes.data;
     sessions.value = sessRes.data;
-    
-    // 修复 TS 错误：显式判断第一个元素
-    const firstSession = sessions.value[0];
-    if (firstSession) {
-       await switchSession(firstSession.id); 
-    } else {
-       createNewChat();
-    }
+
+    // 进入聊天页默认展示空白新会话，不自动打开历史会话
+    createNewChat();
      // 初始化 APP 端语音识别权限
   if (Capacitor.isNativePlatform()) {
     try {
@@ -472,7 +468,18 @@ const speak = async (text: string) => {
   }
 };
 const formatTime = (t?: string) => t ? new Date(t).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
-const renderMarkdown = (t: string) => md.render(t);
+const sanitizeForDisplay = (t: string) => {
+  if (!t) return '';
+  return t.replace(/<iframe[\s\S]*?<\/iframe>/gi, (block: string) => {
+    const srcMatch = block.match(/\ssrc=(['"])(.*?)\1/i);
+    if (!srcMatch) return '（已拦截无效嵌入内容）';
+    const src = srcMatch[2] || '';
+    const trusted = /^(https?:\/\/[^"']+)?\/embed\/report(\?|$)/i.test(src);
+    return trusted ? block : '（已拦截外部嵌入内容）';
+  });
+};
+const renderMarkdown = (t: string) => md.render(sanitizeForDisplay(t));
+const isToolReportMessage = (msg: Message) => msg.role === 'ai' && /tool-report-frame|iframe_report|\/embed\/report/i.test(msg.content || '');
 const scrollToBottom = async () => { await nextTick(); if (messageBox.value) messageBox.value.scrollTop = messageBox.value.scrollHeight; };
 const quickStart = (t: string) => { inputQuery.value = t; handleSend(); };
 const deleteSession = async (id: string) => {
@@ -550,13 +557,50 @@ const deleteSession = async (id: string) => {
   .session-display { .label { font-size: 9px; color: #999; display: block; } .title { font-size: 16px; margin: 0; color: #333; font-weight: bold; } }
 }
 
-.message-wall { flex: 1; padding: 20px 15% 120px; overflow-y: auto; @media (max-width: 768px) { padding: 15px 10px 100px; } }
+.message-wall { flex: 1; padding: 20px 6% 120px; overflow-y: auto; @media (max-width: 768px) { padding: 15px 10px 100px; } }
 
 .msg-row {
   display: flex; margin-bottom: 20px;
   &.is-user { justify-content: flex-end; .msg-bubble { background: #409eff; color: #fff; border-radius: 16px 16px 2px 16px; } }
-  &.is-ai { justify-content: flex-start; .msg-bubble { background: #f4f6f8; color: #333; border-radius: 16px 16px 16px 2px; } }
+  &.is-ai { justify-content: flex-start; .msg-bubble { background: #f4f6f8; color: #333; border-radius: 16px 16px 16px 2px; max-width: 96%; } }
   .msg-bubble { max-width: 88%; padding: 12px 16px; font-size: 14.5px; line-height: 1.6; }
+}
+
+.msg-row.has-tool-report .msg-bubble {
+  width: min(1280px, 100%);
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.msg-bubble :deep(.tool-call-chip) {
+  margin-top: 10px;
+  margin-bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  color: #1f5b90;
+  background: #eaf4ff;
+  border: 1px solid #cfe6ff;
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.msg-bubble :deep(.tool-report-frame) {
+  width: 100%;
+  min-height: 640px;
+  border: 1px solid #dde5ef;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+@media (max-width: 768px) {
+  .msg-row.has-tool-report .msg-bubble {
+    width: 100%;
+  }
+
+  .msg-bubble :deep(.tool-report-frame) {
+    min-height: 560px;
+  }
 }
 
 .ai-footer {

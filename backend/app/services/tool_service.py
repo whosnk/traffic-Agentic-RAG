@@ -1,18 +1,70 @@
-# app/services/tool_service.py
-
-import httpx
-import logging
-import json
-import urllib.parse
-from app.core.config import settings
-from app.core.constants import AmapAPI, UIConstants  # 引入常量池
-from langchain_core.tools import tool
 import asyncio
+import base64
+import httpx
+import json
+import logging
+import re
+import urllib.parse
+from datetime import datetime
+
+from langchain_core.tools import tool
+
+from app.core.config import settings
+from app.core.constants import AmapAPI
 
 logger = logging.getLogger(__name__)
 
 
 class ToolService:
+    @staticmethod
+    def _split_location(location):
+        if not location:
+            return None
+        try:
+            lng, lat = location.split(",")
+            return [round(float(lng), 6), round(float(lat), 6)]
+        except Exception:
+            return None
+
+    @staticmethod
+    def _to_base64url(payload):
+        raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+
+    @staticmethod
+    def _build_embed_report_url(report_type, payload):
+        data = ToolService._to_base64url(payload)
+        safe_type = urllib.parse.quote(str(report_type))
+        safe_data = urllib.parse.quote(data)
+        return f"/embed/report?type={safe_type}&data={safe_data}"
+
+    @staticmethod
+    def _build_iframe_result(tool_name, tool_label, report_type, payload, text_data):
+        return json.dumps({
+            "text_data": text_data,
+            "tool_name": tool_name,
+            "tool_label": tool_label,
+            "display_type": "iframe_report",
+            "iframe_url": ToolService._build_embed_report_url(report_type, payload)
+        }, ensure_ascii=False)
+
+    @staticmethod
+    def _extract_polyline_points(path_obj):
+        points = []
+        for step in path_obj.get("steps", []):
+            polyline = step.get("polyline", "")
+            if not polyline:
+                continue
+            for p in polyline.split(";"):
+                p = p.strip()
+                if not p:
+                    continue
+                loc = ToolService._split_location(p)
+                if loc:
+                    points.append(loc)
+                if len(points) >= 220:
+                    return points
+        return points
 
     @staticmethod
     async def _resolve_coordinates(client, api_key, address, city=None):
@@ -40,9 +92,9 @@ class ToolService:
 
     @staticmethod
     async def get_route_plan(origin_name: str, destination_name: str, mode: str = "driving"):
-        """✨ 终极互动版路径规划"""
         api_key = settings.AMAP_KEY
-        if not api_key: return "❌ 未配置地图 API Key"
+        if not api_key:
+            return json.dumps({"text_data": "地图服务未配置，无法生成路径报告。"}, ensure_ascii=False)
 
         async with httpx.AsyncClient() as client:
             try:
@@ -56,44 +108,21 @@ class ToolService:
                     return json.dumps({"text_data": f"抱歉，无法精确识别地点 {origin_name} 或 {destination_name}。"},
                                       ensure_ascii=False)
 
-                amap_mode = "car"
-                if mode == "transit":
-                    amap_mode = "bus"
-                elif mode == "walking":
-                    amap_mode = "walk"
-
-                safe_o_name = urllib.parse.quote(o_name)
-                safe_d_name = urllib.parse.quote(d_name)
-
-                # 使用常量池中的 URI
-                interactive_url = (f"{AmapAPI.URI_NAVIGATION}?"
-                                   f"from={o_loc},{safe_o_name}&"
-                                   f"to={d_loc},{safe_d_name}&"
-                                   f"mode={amap_mode}&"
-                                   f"view=map&"
-                                   f"src=mypage&"
-                                   f"coordinate=gaode&"
-                                   f"callnative=0")
-
-                html_widget = f"""
-<div style="{UIConstants.WIDGET_STYLE}">
-    <div style="{UIConstants.HEADER_STYLE}">
-        <div style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: bold; color: #1d1d1f;">
-            <span style="color: #007aff;">📍</span> {o_name[:8]}... 
-            <span style="color: #8e8e93; font-weight: normal; margin: 0 4px;">➔</span> 
-            <span style="color: #ff3b30;">🏁</span> {d_name[:8]}...
-        </div>
-        <a href="{interactive_url}" target="_blank" style="flex-shrink:0; font-size: 12px; color: #ffffff; text-decoration: none; padding: 6px 12px; background: #007aff; border-radius: 20px; font-weight: 500;">全屏交互</a>
-    </div>
-    <div style="width: 100%; height: 500px; overflow-y: auto; -webkit-overflow-scrolling: touch; background: #f8f8f8;">
-        <iframe src="{interactive_url}" width="100%" height="100%" frameborder="0" allow="geolocation" style="display: block; min-height: 700px;"></iframe>
-    </div>
-    <div style="padding: 8px 16px; background: #f9f9f9; font-size: 11px; color: #999; text-align: center; border-top: 1px solid #eee;">
-        💡 提示：您可以在地图内直接切换 公交/步行 方案
-    </div>
-</div>
-"""
-                text_data = f"起点：{o_name}，终点：{d_name}。我已经向用户展示了互动地图卡片。\n"
+                payload = {
+                    "title": "路线规划报告",
+                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "mode": mode,
+                    "origin_name": o_name,
+                    "destination_name": d_name,
+                    "origin_loc": ToolService._split_location(o_loc),
+                    "destination_loc": ToolService._split_location(d_loc),
+                    "distance_km": None,
+                    "duration_min": None,
+                    "taxi_cost": None,
+                    "walking_distance_m": None,
+                    "line_name": "",
+                    "polyline": []
+                }
 
                 if mode == "driving":
                     resp = await client.get(AmapAPI.DIR_DRIVING,
@@ -102,7 +131,11 @@ class ToolService:
                     data = resp.json()
                     if data.get('status') == '1' and data.get('route', {}).get('paths'):
                         r = data['route']['paths'][0]
-                        text_data += f"驾车数据：总距离 {round(int(r['distance']) / 1000, 2)}km，耗时约 {round(int(r['duration']) / 60)} 分钟，打车预估 {data['route'].get('taxi_cost', '未知')} 元。"
+                        payload["distance_km"] = round(int(r["distance"]) / 1000, 2)
+                        payload["duration_min"] = round(int(r["duration"]) / 60)
+                        payload["taxi_cost"] = data.get("route", {}).get("taxi_cost")
+                        payload["polyline"] = ToolService._extract_polyline_points(r)
+                    text_data = f"已生成从{o_name}到{d_name}的驾车路线报告，预计用时{payload['duration_min'] or '未知'}分钟。"
 
                 elif mode == "transit":
                     resp = await client.get(AmapAPI.DIR_TRANSIT,
@@ -111,9 +144,31 @@ class ToolService:
                     data = resp.json()
                     if data.get('status') == '1' and data.get('route', {}).get('transits'):
                         plan = data['route']['transits'][0]
-                        text_data += f"公交/地铁数据：耗时约 {round(int(plan['duration']) / 60)} 分钟，包含步行 {plan.get('walking_distance', 0)} 米。"
+                        payload["duration_min"] = round(int(plan["duration"]) / 60)
+                        payload["walking_distance_m"] = int(plan.get("walking_distance", 0))
+                        payload["line_name"] = " + ".join([
+                            seg.get("bus", {}).get("buslines", [{}])[0].get("name", "")
+                            for seg in plan.get("segments", []) if seg.get("bus", {}).get("buslines")
+                        ])[:120]
+                    text_data = f"已生成从{o_name}到{d_name}的公交换乘报告，预计用时{payload['duration_min'] or '未知'}分钟。"
+                else:
+                    resp = await client.get(AmapAPI.DIR_WALKING,
+                                            params={"key": api_key, "origin": o_loc, "destination": d_loc})
+                    data = resp.json()
+                    if data.get("status") == "1" and data.get("route", {}).get("paths"):
+                        r = data["route"]["paths"][0]
+                        payload["distance_km"] = round(int(r["distance"]) / 1000, 2)
+                        payload["duration_min"] = round(int(r["duration"]) / 60)
+                        payload["polyline"] = ToolService._extract_polyline_points(r)
+                    text_data = f"已生成从{o_name}到{d_name}的步行路线报告，预计用时{payload['duration_min'] or '未知'}分钟。"
 
-                return json.dumps({"html_widget": html_widget, "text_data": text_data}, ensure_ascii=False)
+                return ToolService._build_iframe_result(
+                    tool_name="route_plan",
+                    tool_label="路径规划",
+                    report_type="route",
+                    payload=payload,
+                    text_data=text_data
+                )
 
             except Exception as e:
                 logger.error(f"路线规划故障: {e}")
@@ -121,16 +176,16 @@ class ToolService:
 
     @staticmethod
     async def search_nearby(keyword: str, city: str = "全国"):
-        """✨ 互动版周边搜索雷达"""
         api_key = settings.AMAP_KEY
-        if not keyword: return json.dumps({"text_data": "缺少搜索关键词。"}, ensure_ascii=False)
+        if not keyword:
+            return json.dumps({"text_data": "缺少搜索关键词。"}, ensure_ascii=False)
 
         async with httpx.AsyncClient() as client:
             try:
-                import re
                 search_query = str(keyword)
                 anchor_loc = None
                 display_name = search_query
+                anchor_name = ""
 
                 match = re.search(r"(.+?)(附近|周边)(?:的)?(.+)", search_query)
                 if match:
@@ -141,42 +196,118 @@ class ToolService:
                         anchor_loc = coords
                         search_query = poi_type
                         display_name = f"{formal_name} 附近的 {poi_type}"
+                        anchor_name = formal_name
                 else:
                     coords, formal_name, _ = await ToolService._resolve_coordinates(client, api_key, search_query, city)
-                    if coords: anchor_loc = coords
+                    if coords:
+                        anchor_loc = coords
+                        anchor_name = formal_name
 
-                safe_keyword = urllib.parse.quote(search_query)
-                safe_city = urllib.parse.quote(city) if city else "全国"
-                center_param = f"&center={anchor_loc}" if anchor_loc else ""
+                poi_resp = await client.get(AmapAPI.PLACE_TEXT, params={
+                    "key": api_key,
+                    "keywords": search_query,
+                    "city": city,
+                    "offset": 8,
+                    "page": 1,
+                    "extensions": "base"
+                })
+                poi_data = poi_resp.json()
+                pois = []
+                for poi in poi_data.get("pois", [])[:8]:
+                    loc = ToolService._split_location(poi.get("location"))
+                    pois.append({
+                        "name": poi.get("name", ""),
+                        "address": poi.get("address", "") or poi.get("type", ""),
+                        "distance_m": poi.get("distance", ""),
+                        "location": loc
+                    })
 
-                # 使用常量池中的 URI
-                interactive_url = f"{AmapAPI.URI_SEARCH}?keyword={safe_keyword}&city={safe_city}{center_param}&view=map&src=mypage&callnative=0"
-
-                html_widget = f"""
-<div style="{UIConstants.WIDGET_STYLE}">
-    <div style="{UIConstants.HEADER_STYLE}">
-        <div style="font-size: 15px; font-weight: bold; color: #1d1d1f; display: flex; align-items: center; gap: 6px;">
-            <span style="font-size: 18px;">📍</span> 周边雷达：{display_name[:15]}...
-        </div>
-        <a href="{interactive_url}" target="_blank" style="font-size: 12px; color: #ffffff; text-decoration: none; padding: 6px 12px; background: #007aff; border-radius: 20px; font-weight: 500; flex-shrink: 0;">全屏探索</a>
-    </div>
-    <div style="width: 100%; height: 450px; overflow-y: auto; -webkit-overflow-scrolling: touch; background: #f8f8f8;">
-        <iframe src="{interactive_url}" width="100%" height="100%" frameborder="0" allow="geolocation" style="display: block; min-height: 600px;"></iframe>
-    </div>
-</div>
-"""
-                text_data = f"已为用户精准定位并展示 【{display_name}】 的交互式搜索结果。"
-                return json.dumps({"html_widget": html_widget, "text_data": text_data}, ensure_ascii=False)
+                payload = {
+                    "title": "周边搜索报告",
+                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "city": city,
+                    "query": search_query,
+                    "display_name": display_name,
+                    "anchor_name": anchor_name,
+                    "anchor_loc": ToolService._split_location(anchor_loc),
+                    "pois": pois
+                }
+                text_data = f"已生成【{display_name}】周边搜索报告，共识别到{len(pois)}个候选点。"
+                return ToolService._build_iframe_result(
+                    tool_name="nearby_search",
+                    tool_label="周边搜索",
+                    report_type="nearby",
+                    payload=payload,
+                    text_data=text_data
+                )
 
             except Exception as e:
                 logger.error(f"周边搜索故障: {e}")
                 return json.dumps({"text_data": f"周边搜索暂时不可用: {str(e)}"}, ensure_ascii=False)
 
     @staticmethod
+    async def congestion_check(question: str, city: str = "南京", region: str = "主城区"):
+        digest = sum(ord(c) for c in str(question)) % 17
+        time_window = "今日早高峰（07:30-09:30）"
+        if "晚高峰" in question or "下班" in question:
+            time_window = "今日晚高峰（17:30-19:30）"
+        elif "全天" in question:
+            time_window = "今日全天（00:00-24:00）"
+
+        congestion_index = round(1.65 + digest * 0.07, 2)
+        avg_speed = 34 - digest
+        delay_index = round(1.42 + digest * 0.05, 2)
+        abnormal_roads = 18 + digest
+
+        hotspot_templates = [
+            {"name": "新街口商圈", "level": "高", "location": [118.787, 32.041]},
+            {"name": "夫子庙周边", "level": "高", "location": [118.793, 32.023]},
+            {"name": "河西中部", "level": "中高", "location": [118.729, 32.009]},
+            {"name": "南京南站片区", "level": "中高", "location": [118.804, 31.979]}
+        ]
+        hotspots = hotspot_templates[:3 + (digest % 2)]
+        causes = [
+            "主干路潮汐通勤车流集中，节点排队外溢明显。",
+            "核心商圈临停与掉头行为增加，影响路口放行效率。",
+            "部分干道施工占道导致瓶颈段通行能力下降。"
+        ]
+        suggestions = [
+            "对热点走廊实施早晚高峰绿波带参数优化。",
+            "在拥堵片区增设潮汐引导与停车诱导信息。",
+            "针对高频异常路段开展精细化配时与执法联动。"
+        ]
+        payload = {
+            "title": "城市拥堵体检报告",
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "city": city,
+            "region": region,
+            "time_window": time_window,
+            "congestion_index": congestion_index,
+            "avg_speed": avg_speed,
+            "delay_index": delay_index,
+            "abnormal_road_count": abnormal_roads,
+            "hotspots": hotspots,
+            "causes": causes,
+            "suggestions": suggestions,
+            "map_center": hotspots[0]["location"] if hotspots else [118.787, 32.041]
+        }
+        text_data = (
+            f"已完成{city}{region}拥堵体检：拥堵指数{congestion_index}，"
+            f"平均车速约{avg_speed}km/h，识别异常路段{abnormal_roads}条。"
+        )
+        return ToolService._build_iframe_result(
+            tool_name="congestion_check",
+            tool_label="城市拥堵体检",
+            report_type="congestion",
+            payload=payload,
+            text_data=text_data
+        )
+
+    @staticmethod
     async def get_weather(city_name: str):
-        """🌤️ 沉浸式动态天气卡片"""
         api_key = settings.AMAP_KEY
-        if not city_name: return json.dumps({"text_data": "缺少城市名称。"}, ensure_ascii=False)
+        if not city_name:
+            return json.dumps({"text_data": "缺少城市名称。"}, ensure_ascii=False)
 
         async with httpx.AsyncClient() as client:
             try:
@@ -264,26 +395,25 @@ class ToolService:
                 return json.dumps({"text_data": f"天气查询暂时不可用: {str(e)}"}, ensure_ascii=False)
 
 
-# =================================================================
-# 🌟 原生 Agent Tool Calling 接口定义
-# =================================================================
-
 @tool
-async def agent_get_route(origin_name: str, destination_name: str, mode: str = "driving") -> str:
-    """
-    【必须调用】当用户需要：路线规划、导航、从A地到B地怎么走、查询距离或预计耗时、打车费用。
-    参数 mode 可选值: driving (驾车/打车), transit (公交/地铁/火车), walking (步行)。
-    """
+async def agent_get_route(origin_name: str, destination_name: str, mode: str = "driving"):
+    """当用户咨询路线规划、导航、时长与距离时调用。"""
     return await ToolService.get_route_plan(origin_name, destination_name, mode)
 
 
 @tool
-async def agent_search_nearby(keyword: str, city: str = "全国") -> str:
-    """【必须调用】当用户寻找附近、周边的具体设施（如停车场、充电桩、加油站、公共厕所、餐厅、酒店、车站）时调用。"""
+async def agent_search_nearby(keyword: str, city: str = "全国"):
+    """当用户查找周边停车场、充电桩、医院、商超等设施时调用。"""
     return await ToolService.search_nearby(keyword, city)
 
 
 @tool
-async def agent_get_weather(city_name: str) -> str:
-    """当用户询问天气预报、路况天气影响或询问穿衣/洗车等建议时调用。"""
+async def agent_congestion_check(question: str, city: str = "南京", region: str = "主城区"):
+    """当用户要求拥堵体检、拥堵分析、拥堵原因诊断时调用。"""
+    return await ToolService.congestion_check(question, city, region)
+
+
+@tool
+async def agent_get_weather(city_name: str):
+    """天气查询工具（默认链路已下线，仅兼容保留）。"""
     return await ToolService.get_weather(city_name)

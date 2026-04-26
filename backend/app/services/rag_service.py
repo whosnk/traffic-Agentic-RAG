@@ -31,7 +31,7 @@ from app.models import User
 from app.models.knowledge import KnowledgeDoc
 from app.services.cache_service import CacheManager
 from app.services.config_service import ConfigService
-from app.services.tool_service import agent_get_route, agent_search_nearby, agent_get_weather
+from app.services.tool_service import agent_get_route, agent_search_nearby, agent_congestion_check
 
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 logger = logging.getLogger("RAGService")
@@ -379,7 +379,7 @@ class RAGService:
         try:
             print("🤖 [Agent] 正在思考...")
             agent_system_prompt = SystemMessage(content=AGENT_SYSTEM_PROMPT)
-            tools = [agent_get_route, agent_search_nearby, agent_get_weather]
+            tools = [agent_get_route, agent_search_nearby, agent_congestion_check]
             llm_with_tools = self.rewriter_llm.bind_tools(tools)
             messages_for_agent = [agent_system_prompt] + chat_history_objs + [HumanMessage(content=search_query)]
 
@@ -398,8 +398,8 @@ class RAGService:
                         status_text = "🔄 **正在规划出行方案...**\n\n"
                     elif "nearby" in tool_name:
                         status_text = "🔄 **正在搜索周边设施...**\n\n"
-                    elif "weather" in tool_name:
-                        status_text = "🔄 **正在查询实时天气...**\n\n"
+                    elif "congestion" in tool_name:
+                        status_text = "🔄 **正在生成城市拥堵体检报告...**\n\n"
 
                     yield json.dumps({"type": "content", "data": status_text})
 
@@ -410,9 +410,21 @@ class RAGService:
 
                         try:
                             res_dict = json.loads(tool_res_str)
-                            if "html_widget" in res_dict and "text_data" in res_dict:
-                                yield json.dumps({"type": "content", "data": res_dict["html_widget"] + "\n\n"},
-                                                 ensure_ascii=False)
+                            if (
+                                res_dict.get("display_type") == "iframe_report"
+                                and res_dict.get("iframe_url")
+                                and res_dict.get("text_data")
+                            ):
+                                tool_label = res_dict.get("tool_label") or res_dict.get("tool_name") or "工具"
+                                iframe_block = (
+                                    f"<div class=\"tool-call-chip\">已调用工具：{tool_label}</div>\n"
+                                    f"<iframe class=\"tool-report-frame\" src=\"{res_dict['iframe_url']}\" "
+                                    f"title=\"{tool_label}报告\" loading=\"lazy\"></iframe>\n\n"
+                                )
+                                yield json.dumps(
+                                    {"type": "content", "data": str(res_dict["text_data"]) + "\n\n" + iframe_block},
+                                    ensure_ascii=False
+                                )
                                 messages_for_agent.append(
                                     ToolMessage(content=res_dict["text_data"], tool_call_id=tool_call["id"]))
                                 continue

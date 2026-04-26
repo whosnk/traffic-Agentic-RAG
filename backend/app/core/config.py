@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     BASE_DIR: str = str(Path(__file__).resolve().parent.parent.parent)
 
     API_V1_STR: str = "/api/v1"
-    PROJECT_NAME: str = "Traffic QA System"
+    PROJECT_NAME: str = "交通治理决策智能体"
 
     # --- 数据库配置 ---
     SQLITE_URL: str = ""

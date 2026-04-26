@@ -4,7 +4,7 @@
     <div class="login-card">
       <div class="card-header">
         <img src="https://api.dicebear.com/7.x/bottts/svg?seed=Traffic" alt="logo" class="logo" />
-        <h1>ITQA 智能交通</h1>
+        <h1>交通治理决策智能体</h1>
         <p>{{ isLogin ? '欢迎回来，请登录您的账号' : '创建一个新账号以开始提问' }}</p>
       </div>
 

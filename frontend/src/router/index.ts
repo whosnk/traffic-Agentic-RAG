@@ -7,6 +7,7 @@ import GraphView from '../views/GraphView.vue';
 import Landing from '../views/Landing.vue';
 import Quiz from '../views/Quiz.vue'; 
 import AiSettings from '../views/AiSettings.vue';
+import EmbedReport from '../views/EmbedReport.vue';
 const routes = [
   { 
     path: '/', 
@@ -15,6 +16,11 @@ const routes = [
     meta: { requiresAuth: true } // 必须登录后才能选择功能
   },
   { path: '/login', name: 'Login', component: Login },
+  {
+    path: '/embed/report',
+    name: 'EmbedReport',
+    component: EmbedReport
+  },
   { 
     path: '/chat', 
     name: 'Chat', 

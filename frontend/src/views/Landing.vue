@@ -7,7 +7,7 @@
     <div class="content-box">
       <header class="hero-section">
         <div class="logo-circle">🚗</div>
-        <h1>交通决策治理智能体</h1>
+        <h1>交通治理决策智能体</h1>
         <p>通过自然语言交互完成交通诊断、拥堵体检、方案生成与结果展示</p>
       </header>
 
