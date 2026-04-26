@@ -1,0 +1,117 @@
+:root {
+  --ai-primary: #2563eb;
+  --ai-primary-strong: #1d4ed8;
+  --ai-accent: #7c3aed;
+  --ai-success: #16a34a;
+  --ai-warning: #f59e0b;
+  --ai-danger: #ef4444;
+  --ai-bg: #f6f8fc;
+  --ai-bg-soft: #eef4ff;
+  --ai-surface: rgba(255, 255, 255, 0.88);
+  --ai-surface-solid: #ffffff;
+  --ai-border: rgba(148, 163, 184, 0.22);
+  --ai-border-strong: rgba(37, 99, 235, 0.18);
+  --ai-text: #0f172a;
+  --ai-text-muted: #64748b;
+  --ai-text-soft: #94a3b8;
+  --ai-radius-sm: 10px;
+  --ai-radius-md: 16px;
+  --ai-radius-lg: 24px;
+  --ai-radius-xl: 32px;
+  --ai-shadow-sm: 0 8px 24px rgba(15, 23, 42, 0.06);
+  --ai-shadow-md: 0 18px 45px rgba(15, 23, 42, 0.10);
+  --ai-shadow-glow: 0 18px 50px rgba(37, 99, 235, 0.16);
+  --ai-gradient: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+  --ai-gradient-soft: radial-gradient(circle at top left, rgba(37, 99, 235, 0.16), transparent 32%), radial-gradient(circle at bottom right, rgba(124, 58, 237, 0.14), transparent 34%), #f6f8fc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  color: var(--ai-text);
+  background: var(--ai-bg);
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea {
+  font-family: inherit;
+}
+
+.ai-page-shell {
+  min-height: 100vh;
+  width: 100vw;
+  position: relative;
+  overflow-x: hidden;
+  background: var(--ai-gradient-soft);
+}
+
+.ai-surface-card {
+  background: var(--ai-surface);
+  border: 1px solid var(--ai-border);
+  border-radius: var(--ai-radius-lg);
+  box-shadow: var(--ai-shadow-sm);
+  backdrop-filter: blur(22px);
+}
+
+.ai-gradient-text {
+  background: var(--ai-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.28);
+  border-radius: 999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.el-button {
+  font-weight: 600;
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--ai-primary);
+  --el-button-border-color: var(--ai-primary);
+  --el-button-hover-bg-color: var(--ai-primary-strong);
+  --el-button-hover-border-color: var(--ai-primary-strong);
+}
+
+.el-input__wrapper,
+.el-textarea__inner {
+  border-radius: var(--ai-radius-sm) !important;
+}
+
+.markdown-body {
+  word-break: break-word;
+}
+
+.markdown-body p:first-child {
+  margin-top: 0;
+}
+
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}

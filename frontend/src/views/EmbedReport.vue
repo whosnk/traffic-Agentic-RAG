@@ -268,8 +268,8 @@ watch(
 .embed-page {
   min-height: 100vh;
   margin: 0;
-  padding: 12px;
-  background: linear-gradient(180deg, #f6f8fb 0%, #ffffff 55%);
+  padding: 18px;
+  background: var(--ai-gradient-soft);
   box-sizing: border-box;
   color: #2b2f36;
   font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -278,23 +278,26 @@ watch(
 .panel {
   max-width: 1180px;
   margin: 0 auto;
-  background: #fff;
-  border: 1px solid #e8edf3;
-  border-radius: 14px;
-  box-shadow: 0 6px 20px rgba(21, 29, 40, 0.05);
-  padding: 14px;
+  background: var(--ai-surface);
+  border: 1px solid var(--ai-border);
+  border-radius: 24px;
+  box-shadow: var(--ai-shadow-md);
+  padding: 18px;
+  backdrop-filter: blur(22px);
 }
 
 .report-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid #edf1f6;
-  padding-bottom: 10px;
-  margin-bottom: 12px;
+  border-bottom: 1px solid var(--ai-border);
+  padding-bottom: 14px;
+  margin-bottom: 16px;
   h2 {
     margin: 0;
-    font-size: 20px;
+    font-size: 22px;
+    color: var(--ai-text);
+    font-weight: 900;
   }
   .time-text {
     font-size: 12px;
@@ -303,10 +306,12 @@ watch(
 }
 
 .section {
-  margin-bottom: 14px;
+  margin-bottom: 16px;
   h3 {
     margin: 0 0 8px;
     font-size: 15px;
+    color: var(--ai-text);
+    font-weight: 800;
   }
 }
 
@@ -317,10 +322,10 @@ watch(
 }
 
 .meta-item, .kpi {
-  border: 1px solid #ebeff5;
-  border-radius: 10px;
-  padding: 10px;
-  background: #fafcff;
+  border: 1px solid var(--ai-border);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(255,255,255,0.78);
   span {
     display: block;
     font-size: 12px;
@@ -335,10 +340,10 @@ watch(
 
 .list-block {
   margin-top: 10px;
-  padding: 10px;
-  border: 1px solid #edf1f6;
-  border-radius: 10px;
-  background: #fff;
+  padding: 12px;
+  border: 1px solid var(--ai-border);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.86);
   ul {
     margin: 0;
     padding-left: 18px;
@@ -357,11 +362,12 @@ watch(
 
 .map-box {
   width: 100%;
-  height: 320px;
-  border: 1px solid #e7edf4;
-  border-radius: 10px;
+  height: 360px;
+  border: 1px solid var(--ai-border);
+  border-radius: 18px;
   overflow: hidden;
   background: #f3f6fb;
+  box-shadow: var(--ai-shadow-sm);
 }
 
 .map-hint {

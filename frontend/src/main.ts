@@ -5,6 +5,7 @@ import App from './App.vue'
 // 引入 Element Plus
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
+import './styles/theme.scss'
 
 // 引入 路由 (下一步我们会创建它)
 import router from './router'

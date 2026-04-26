@@ -117,21 +117,21 @@ onMounted(() => { if (!isLogin.value) refreshCaptcha(); });
 <style scoped lang="scss">
 .login-page {
   height: 100vh; width: 100vw; display: flex; justify-content: center; align-items: center;
-  background: #eef2f7; position: relative; overflow: hidden;
+  background: var(--ai-gradient-soft); position: relative; overflow: hidden;
 }
 .bg-glow {
-  position: absolute; width: 600px; height: 600px; background: rgba(64, 158, 255, 0.15);
+  position: absolute; width: 600px; height: 600px; background: rgba(37, 99, 235, 0.16);
   filter: blur(100px); border-radius: 50%; top: -10%; right: -10%;
 }
 .login-card {
-  width: 420px; padding: 40px; background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(20px); border-radius: 28px; border: 1px solid rgba(255, 255, 255, 0.5);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.05); z-index: 1;
+  width: 440px; padding: 42px; background: var(--ai-surface);
+  backdrop-filter: blur(24px); border-radius: 30px; border: 1px solid var(--ai-border);
+  box-shadow: var(--ai-shadow-md); z-index: 1;
   .card-header {
     text-align: center; margin-bottom: 30px;
     .logo { width: 64px; height: 64px; margin-bottom: 12px; }
-    h1 { font-size: 26px; color: #303133; margin: 0; }
-    p { font-size: 14px; color: #909399; margin-top: 8px; }
+    h1 { font-size: 28px; color: var(--ai-text); margin: 0; font-weight: 900; }
+    p { font-size: 14px; color: var(--ai-text-muted); margin-top: 10px; }
   }
 }
 .captcha-row {
@@ -142,7 +142,7 @@ onMounted(() => { if (!isLogin.value) refreshCaptcha(); });
     font-family: monospace; font-weight: bold; cursor: pointer; letter-spacing: 2px;
   }
 }
-.submit-btn { width: 100%; height: 46px; border-radius: 12px; margin-top: 10px; font-size: 16px; }
-.switch-mode { margin-top: 20px; text-align: center; font-size: 14px; color: #606266; }
+.submit-btn { width: 100%; height: 48px; border-radius: 14px; margin-top: 10px; font-size: 16px; background: var(--ai-gradient); border: none; }
+.switch-mode { margin-top: 20px; text-align: center; font-size: 14px; color: var(--ai-text-muted); }
 :deep(.el-input__wrapper) { border-radius: 10px; }
 </style>

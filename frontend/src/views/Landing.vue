@@ -6,9 +6,9 @@
 
     <div class="content-box">
       <header class="hero-section">
-        <div class="logo-circle">🚗</div>
+        <div class="logo-circle">智</div>
         <h1>交通治理决策智能体</h1>
-        <p>通过自然语言交互完成交通诊断、拥堵体检、方案生成与结果展示</p>
+        <p>像使用 AI 助手一样完成交通诊断、拥堵体检、治理方案生成与结果展示</p>
       </header>
 
       <!-- 功能导航网格：响应式适配 -->
@@ -17,7 +17,7 @@
         <div class="nav-card" @click="$router.push('/chat')">
           <div class="card-icon chat-icon"><el-icon><ChatLineRound /></el-icon></div>
           <div class="card-body">
-            <h3>交通治理助手</h3>
+            <h3>智能对话工作台</h3>
             <p>基于自然语言完成交通问题分析、治理问答与任务分解</p>
           </div>
           <el-icon class="arrow"><ArrowRight /></el-icon>
@@ -76,7 +76,7 @@ const handleLogout = () => {
 
 <style scoped lang="scss">
 .landing-wrapper {
-  min-height: 100vh; width: 100vw; background: #f4f7f9;
+  min-height: 100vh; width: 100vw; background: var(--ai-gradient-soft);
   display: flex; justify-content: center; align-items: center;
   position: relative; overflow-x: hidden; padding: 20px;
 }
@@ -84,55 +84,55 @@ const handleLogout = () => {
 .bg-blob {
   position: absolute; border-radius: 50%; filter: blur(80px); z-index: 0; opacity: 0.5;
 }
-.blob-1 { width: 400px; height: 400px; background: #409eff; top: -100px; left: -100px; }
-.blob-2 { width: 300px; height: 300px; background: #67c23a; bottom: -50px; right: -50px; }
+.blob-1 { width: 440px; height: 440px; background: rgba(37, 99, 235, 0.22); top: -120px; left: -120px; }
+.blob-2 { width: 340px; height: 340px; background: rgba(124, 58, 237, 0.18); bottom: -60px; right: -60px; }
 
-.content-box { z-index: 1; width: 100%; max-width: 800px; }
+.content-box { z-index: 1; width: 100%; max-width: 980px; }
 
 .hero-section {
-  text-align: center; margin-bottom: 40px;
-  .logo-circle { font-size: 40px; margin-bottom: 10px; }
-  h1 { font-size: 28px; color: #333; margin: 0; font-weight: 800; }
-  p { color: #888; margin-top: 5px; }
+  text-align: center; margin-bottom: 42px;
+  .logo-circle { width: 70px; height: 70px; margin: 0 auto 18px; border-radius: 24px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 30px; font-weight: 900; background: var(--ai-gradient); box-shadow: var(--ai-shadow-glow); }
+  h1 { font-size: 44px; color: var(--ai-text); margin: 0; font-weight: 900; letter-spacing: -0.05em; }
+  p { color: var(--ai-text-muted); margin: 12px auto 0; max-width: 640px; line-height: 1.8; }
 }
 
 .nav-grid {
-  display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px;
   @media (max-width: 600px) { grid-template-columns: 1fr; } /* 移动端单列 */
 }
 
 .nav-card {
-  background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px);
-  border-radius: 20px; padding: 20px; cursor: pointer;
+  background: rgba(255, 255, 255, 0.84); backdrop-filter: blur(22px);
+  border-radius: 24px; padding: 24px; cursor: pointer;
   display: flex; align-items: center; gap: 15px;
-  transition: all 0.3s ease; border: 1px solid rgba(255,255,255,0.5);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+  transition: all 0.26s ease; border: 1px solid var(--ai-border);
+  box-shadow: var(--ai-shadow-sm);
 
   &:hover {
     transform: translateY(-5px); background: #fff;
-    box-shadow: 0 12px 24px rgba(0,0,0,0.08);
-    .arrow { transform: translateX(5px); color: #409eff; }
+    box-shadow: var(--ai-shadow-md);
+    .arrow { transform: translateX(5px); color: var(--ai-primary); }
   }
 
   .card-icon {
-    width: 50px; height: 50px; border-radius: 12px;
+    width: 54px; height: 54px; border-radius: 16px;
     display: flex; align-items: center; justify-content: center; font-size: 24px;
-    &.chat-icon { background: #e6f1fc; color: #409eff; }
-    &.graph-icon { background: #f0f9eb; color: #67c23a; }
-    &.profile-icon { background: #f4f4f5; color: #909399; }
-    &.quiz-icon { background: #fdf5e6; color: #ff9800; }
+    &.chat-icon { background: rgba(37,99,235,0.1); color: var(--ai-primary); }
+    &.graph-icon { background: rgba(22,163,74,0.1); color: var(--ai-success); }
+    &.profile-icon { background: rgba(100,116,139,0.1); color: var(--ai-text-muted); }
+    &.quiz-icon { background: rgba(245,158,11,0.12); color: var(--ai-warning); }
   }
 
   .card-body {
     flex: 1;
-    h3 { margin: 0; font-size: 16px; color: #333; }
-    p { margin: 4px 0 0; font-size: 12px; color: #999; line-height: 1.4; }
+    h3 { margin: 0; font-size: 17px; color: var(--ai-text); font-weight: 800; }
+    p { margin: 6px 0 0; font-size: 12.5px; color: var(--ai-text-muted); line-height: 1.6; }
   }
   .arrow { color: #ccc; transition: 0.3s; }
 }
 
 .landing-footer {
   margin-top: 40px; display: flex; justify-content: space-between;
-  font-size: 12px; color: #bbb;
+  font-size: 12px; color: var(--ai-text-soft);
 }
 </style>
