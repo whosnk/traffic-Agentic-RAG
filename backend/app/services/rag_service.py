@@ -31,7 +31,13 @@ from app.models import User
 from app.models.knowledge import KnowledgeDoc
 from app.services.cache_service import CacheManager
 from app.services.config_service import ConfigService
-from app.services.tool_service import agent_get_route, agent_search_nearby, agent_congestion_check
+from app.services.tool_service import (
+    agent_get_route,
+    agent_search_nearby,
+    agent_congestion_check,
+    agent_ev_charge_plan,
+    agent_ev_charge_simulation
+)
 
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 logger = logging.getLogger("RAGService")
@@ -379,7 +385,13 @@ class RAGService:
         try:
             print("🤖 [Agent] 正在思考...")
             agent_system_prompt = SystemMessage(content=AGENT_SYSTEM_PROMPT)
-            tools = [agent_get_route, agent_search_nearby, agent_congestion_check]
+            tools = [
+                agent_get_route,
+                agent_search_nearby,
+                agent_congestion_check,
+                agent_ev_charge_plan,
+                agent_ev_charge_simulation
+            ]
             llm_with_tools = self.rewriter_llm.bind_tools(tools)
             messages_for_agent = [agent_system_prompt] + chat_history_objs + [HumanMessage(content=search_query)]
 
@@ -394,7 +406,11 @@ class RAGService:
                     tool_args = tool_call["args"]
 
                     status_text = ""
-                    if "route" in tool_name:
+                    if "simulation" in tool_name:
+                        status_text = "🔄 **正在生成电动车充电路径仿真推演...**\n\n"
+                    elif "ev" in tool_name or "charge" in tool_name:
+                        status_text = "🔄 **正在生成电动车充电路径规划报告...**\n\n"
+                    elif "route" in tool_name:
                         status_text = "🔄 **正在规划出行方案...**\n\n"
                     elif "nearby" in tool_name:
                         status_text = "🔄 **正在搜索周边设施...**\n\n"

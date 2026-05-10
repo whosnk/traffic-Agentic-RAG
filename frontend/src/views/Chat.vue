@@ -127,7 +127,7 @@
                 <div class="suggest-card" @click="quickStart('请分析今天主城区的拥堵情况')">📊 主城区拥堵分析</div>
                 <div class="suggest-card" @click="quickStart('早高峰主要拥堵原因是什么')">🚦 高峰成因诊断</div>
                 <div class="suggest-card" @click="quickStart('请生成一份城市拥堵体检结果')">🩺 城市拥堵体检</div>
-                <div class="suggest-card" @click="quickStart('给出初步交通治理建议')">🧭 治理建议生成</div>
+                <div class="suggest-card" @click="quickStart('仿真推演一下电动车从南京到上海的充电过程，当前电量45%，按均衡模式')">🔋 充电仿真推演</div>
               </div>
             </div>
           </div>

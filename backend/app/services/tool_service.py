@@ -3,6 +3,7 @@ import base64
 import httpx
 import json
 import logging
+import math
 import re
 import urllib.parse
 from datetime import datetime
@@ -16,15 +17,69 @@ logger = logging.getLogger(__name__)
 
 
 class ToolService:
+    CITY_LOCATIONS = {
+        "南京": ("118.796877,32.060255", "南京", "320100"),
+        "南京市": ("118.796877,32.060255", "南京", "320100"),
+        "上海": ("121.473667,31.230525", "上海", "310000"),
+        "上海市": ("121.473667,31.230525", "上海", "310000"),
+        "北京": ("116.407387,39.904179", "北京", "110000"),
+        "北京市": ("116.407387,39.904179", "北京", "110000"),
+        "杭州": ("120.15507,30.274085", "杭州", "330100"),
+        "杭州市": ("120.15507,30.274085", "杭州", "330100"),
+        "苏州": ("120.585315,31.298886", "苏州", "320500"),
+        "苏州市": ("120.585315,31.298886", "苏州", "320500")
+    }
+
+    EV_STYLE_COEFFICIENTS = {
+        "经济": {"cost": 0.8, "driving_time": 0.2, "queue_time": 0.2},
+        "效率": {"cost": 0.15, "driving_time": 0.7, "queue_time": 0.8},
+        "均衡": {"cost": 0.2, "driving_time": 0.3, "queue_time": 0.1},
+        "自定义": {"cost": 0.3, "driving_time": 0.3, "queue_time": 0.3}
+    }
+
     @staticmethod
     def _split_location(location):
         if not location:
             return None
         try:
-            lng, lat = location.split(",")
+            lng, lat = str(location).split(",")
             return [round(float(lng), 6), round(float(lat), 6)]
         except Exception:
             return None
+
+    @staticmethod
+    def _fallback_location(address):
+        key = str(address or "").strip()
+        return ToolService.CITY_LOCATIONS.get(key)
+
+    @staticmethod
+    def _build_fallback_route(origin_loc, destination_loc):
+        origin = ToolService._split_location(origin_loc)
+        destination = ToolService._split_location(destination_loc)
+        lng1, lat1 = origin
+        lng2, lat2 = destination
+        radius = 6371
+        d_lat = math.radians(lat2 - lat1)
+        d_lng = math.radians(lng2 - lng1)
+        a = (
+            math.sin(d_lat / 2) ** 2
+            + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lng / 2) ** 2
+        )
+        direct_distance = 2 * radius * math.asin(math.sqrt(a))
+        distance_km = round(direct_distance * 1.18, 2)
+        duration_min = round(distance_km / 78 * 60)
+        polyline = []
+        for i in range(9):
+            fraction = i / 8
+            polyline.append([
+                round(lng1 + (lng2 - lng1) * fraction, 6),
+                round(lat1 + (lat2 - lat1) * fraction, 6)
+            ])
+        return {
+            "distance_km": distance_km,
+            "duration_min": duration_min,
+            "polyline": polyline
+        }
 
     @staticmethod
     def _to_base64url(payload):
@@ -67,8 +122,198 @@ class ToolService:
         return points
 
     @staticmethod
+    def _pick_route_point(polyline, fraction, fallback):
+        if not polyline:
+            return fallback
+        idx = int((len(polyline) - 1) * fraction)
+        idx = max(0, min(len(polyline) - 1, idx))
+        return polyline[idx]
+
+    @staticmethod
+    def _attach_real_charge_stations(charge_stops, station_groups):
+        for i, stop in enumerate(charge_stops or []):
+            station_list = []
+            if station_groups and i < len(station_groups):
+                station_list = station_groups[i] or []
+            if station_list:
+                station = station_list[0]
+                stop["name"] = station.get("name") or stop.get("name")
+                stop["address"] = station.get("address", "")
+                stop["location"] = station.get("location") or stop.get("location")
+                stop["poi_distance_m"] = station.get("distance_m", "")
+                stop["station_source"] = "amap_poi"
+                stop["reason"] = "基于实际道路路径沿线搜索到的真实充电站"
+            else:
+                stop["station_source"] = "strategy"
+        return charge_stops
+
+    @staticmethod
+    async def _search_charge_stations_along_stops(client, api_key, charge_stops):
+        station_groups = []
+        for stop in charge_stops or []:
+            location = stop.get("location")
+            if not location:
+                station_groups.append([])
+                continue
+            try:
+                center = f"{location[0]},{location[1]}"
+                resp = await client.get(AmapAPI.PLACE_AROUND, params={
+                    "key": api_key,
+                    "keywords": "充电站|充电桩",
+                    "location": center,
+                    "radius": 5000,
+                    "offset": 5,
+                    "page": 1,
+                    "extensions": "base"
+                })
+                data = resp.json()
+                pois = []
+                if data.get("status") == "1":
+                    for poi in data.get("pois", [])[:5]:
+                        loc = ToolService._split_location(poi.get("location"))
+                        if not loc:
+                            continue
+                        pois.append({
+                            "name": poi.get("name", ""),
+                            "address": poi.get("address", "") or poi.get("type", ""),
+                            "distance_m": poi.get("distance", ""),
+                            "location": loc
+                        })
+                station_groups.append(pois)
+            except Exception:
+                station_groups.append([])
+        return station_groups
+
+    @staticmethod
+    def _build_ev_charge_plan(distance_km, duration_min, polyline, current_soc, reserve_soc, style):
+        style = style if style in ToolService.EV_STYLE_COEFFICIENTS else "均衡"
+        coeff = ToolService.EV_STYLE_COEFFICIENTS[style]
+        battery_capacity = 70
+        consumption_per_100km = 16.5
+        full_range_km = battery_capacity / consumption_per_100km * 100
+        safe_current_soc = max(5, min(100, int(current_soc)))
+        safe_reserve_soc = max(0, min(80, int(reserve_soc)))
+        usable_distance = max(0, (safe_current_soc - safe_reserve_soc) / 100 * full_range_km)
+        remaining_gap = max(0, float(distance_km or 0) - usable_distance)
+        charge_segment_range = full_range_km * 0.58
+        stop_count = 0
+        if remaining_gap > 0:
+            stop_count = int((remaining_gap + charge_segment_range - 1) // charge_segment_range)
+        stop_count = max(0, min(stop_count, 4))
+
+        target_soc_base = 78
+        if style == "经济":
+            target_soc_base = 72
+        elif style == "效率":
+            target_soc_base = 85
+
+        stops = []
+        total_wait_min = 0
+        total_charge_min = 0
+        total_cost = 0
+        for i in range(stop_count):
+            fraction = (i + 1) / (stop_count + 1)
+            target_soc = min(90, target_soc_base + i * 3)
+            location = ToolService._pick_route_point(polyline, fraction, None)
+            charge_kwh = max(8, (target_soc - 35) / 100 * battery_capacity)
+            charge_min = round(charge_kwh / 60 * 60)
+            wait_min = round(8 + coeff["queue_time"] * 18 + i * 3)
+            price = round(1.18 + coeff["cost"] * 0.32, 2)
+            cost = round(charge_kwh * price, 1)
+            total_wait_min += wait_min
+            total_charge_min += charge_min
+            total_cost += cost
+            stops.append({
+                "name": f"建议充电站{i + 1}",
+                "distance_from_start_km": round(float(distance_km or 0) * fraction, 1),
+                "target_soc": target_soc,
+                "estimated_wait_min": wait_min,
+                "estimated_charge_min": charge_min,
+                "price": price,
+                "estimated_cost": cost,
+                "location": location,
+                "reason": "兼顾当前电量、预留电量与出行风格生成的建议节点"
+            })
+
+        return {
+            "style": style,
+            "style_coefficients": coeff,
+            "battery_capacity_kwh": battery_capacity,
+            "consumption_kwh_per_100km": consumption_per_100km,
+            "estimated_range_km": round(full_range_km, 1),
+            "usable_distance_km": round(usable_distance, 1),
+            "charge_stops": stops,
+            "total_wait_min": total_wait_min,
+            "total_charge_min": total_charge_min,
+            "estimated_energy_cost": round(total_cost, 1),
+            "estimated_total_time_min": round(float(duration_min or 0) + total_wait_min + total_charge_min)
+        }
+
+    @staticmethod
+    def _build_ev_simulation_events(origin_name, destination_name, distance_km, duration_min, current_soc,
+                                    reserve_soc, charge_stops):
+        events = []
+        battery_capacity = 70
+        consumption_per_100km = 16.5
+        soc_per_km = consumption_per_100km / battery_capacity
+        stops = charge_stops or []
+        last_name = origin_name
+        last_distance = 0
+        last_soc = max(5, min(100, int(current_soc)))
+
+        nodes = stops + [{
+            "name": destination_name,
+            "distance_from_start_km": float(distance_km or 0),
+            "target_soc": None,
+            "estimated_wait_min": 0,
+            "estimated_charge_min": 0,
+            "estimated_cost": 0,
+            "location": None
+        }]
+
+        for node in nodes:
+            node_distance = float(node.get("distance_from_start_km") or distance_km or 0)
+            segment_distance = max(0, node_distance - last_distance)
+            drive_minutes = round(float(duration_min or 0) * segment_distance / max(float(distance_km or 1), 1))
+            end_soc = max(3, round(last_soc - segment_distance * soc_per_km))
+            if node.get("name") == destination_name:
+                end_soc = max(end_soc, min(max(3, int(reserve_soc)), last_soc))
+            events.append({
+                "type": "drive",
+                "from": last_name,
+                "to": node.get("name") or "下一节点",
+                "distance_km": round(segment_distance, 1),
+                "duration_min": drive_minutes,
+                "start_soc": last_soc,
+                "end_soc": end_soc
+            })
+
+            last_soc = end_soc
+            last_distance = node_distance
+            last_name = node.get("name") or "下一节点"
+
+            if node.get("target_soc"):
+                target_soc = int(node.get("target_soc"))
+                events.append({
+                    "type": "charge",
+                    "station": node.get("name") or "建议充电站",
+                    "duration_min": int(node.get("estimated_wait_min") or 0) + int(node.get("estimated_charge_min") or 0),
+                    "wait_min": int(node.get("estimated_wait_min") or 0),
+                    "charge_min": int(node.get("estimated_charge_min") or 0),
+                    "start_soc": last_soc,
+                    "end_soc": target_soc,
+                    "estimated_cost": node.get("estimated_cost") or 0
+                })
+                last_soc = target_soc
+
+        return events
+
+    @staticmethod
     async def _resolve_coordinates(client, api_key, address, city=None):
         """智能坐标解析助手 (支持模糊匹配)"""
+        fallback = ToolService._fallback_location(address)
+        if fallback:
+            return fallback
         try:
             # 1. 尝试 POI 搜索
             res = await client.get(AmapAPI.PLACE_TEXT,
@@ -88,6 +333,9 @@ class ToolService:
         except Exception:
             pass
 
+        fallback = ToolService._fallback_location(address)
+        if fallback:
+            return fallback
         return None, None, None
 
     @staticmethod
@@ -173,6 +421,170 @@ class ToolService:
             except Exception as e:
                 logger.error(f"路线规划故障: {e}")
                 return json.dumps({"text_data": f"路线规划服务暂时不可用: {str(e)}"}, ensure_ascii=False)
+
+    @staticmethod
+    async def get_ev_charge_plan(origin_name: str, destination_name: str, current_soc: int = 45,
+                                 style: str = "均衡", reserve_soc: int = 20):
+        api_key = settings.AMAP_KEY
+        if not api_key:
+            return json.dumps({"text_data": "地图服务未配置，无法生成电动车充电路径规划。"}, ensure_ascii=False)
+
+        async with httpx.AsyncClient() as client:
+            try:
+                o_loc, o_name, _ = await ToolService._resolve_coordinates(client, api_key, str(origin_name))
+                d_loc, d_name, _ = await ToolService._resolve_coordinates(client, api_key, str(destination_name))
+                if not o_loc or not d_loc:
+                    return json.dumps({"text_data": f"抱歉，无法识别起终点：{origin_name}、{destination_name}。"},
+                                      ensure_ascii=False)
+
+                fallback_route = ToolService._build_fallback_route(o_loc, d_loc)
+                distance_km = fallback_route["distance_km"]
+                duration_min = fallback_route["duration_min"]
+                polyline = fallback_route["polyline"]
+                try:
+                    resp = await client.get(AmapAPI.DIR_DRIVING, params={
+                        "key": api_key,
+                        "origin": o_loc,
+                        "destination": d_loc,
+                        "strategy": 10,
+                        "extensions": "all"
+                    })
+                    data = resp.json()
+                    if data.get("status") == "1" and data.get("route", {}).get("paths"):
+                        path = data["route"]["paths"][0]
+                        distance_km = round(int(path.get("distance", 0)) / 1000, 2)
+                        duration_min = round(int(path.get("duration", 0)) / 60)
+                        polyline = ToolService._extract_polyline_points(path) or polyline
+                except Exception:
+                    pass
+                ev_plan = ToolService._build_ev_charge_plan(
+                    distance_km=distance_km,
+                    duration_min=duration_min,
+                    polyline=polyline,
+                    current_soc=current_soc,
+                    reserve_soc=reserve_soc,
+                    style=style
+                )
+                station_groups = await ToolService._search_charge_stations_along_stops(
+                    client, api_key, ev_plan["charge_stops"]
+                )
+                ToolService._attach_real_charge_stations(ev_plan["charge_stops"], station_groups)
+
+                payload = {
+                    "title": "电动车充电路径规划报告",
+                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "origin_name": o_name,
+                    "destination_name": d_name,
+                    "origin_loc": ToolService._split_location(o_loc),
+                    "destination_loc": ToolService._split_location(d_loc),
+                    "distance_km": distance_km,
+                    "duration_min": duration_min,
+                    "current_soc": max(5, min(100, int(current_soc))),
+                    "reserve_soc": max(0, min(80, int(reserve_soc))),
+                    "polyline": polyline,
+                    **ev_plan
+                }
+                stop_count = len(payload["charge_stops"])
+                text_data = (
+                    f"已生成从{o_name}到{d_name}的电动车充电路径规划：全程约{distance_km}km，"
+                    f"按{payload['style']}模式建议充电{stop_count}次，预计总耗时{payload['estimated_total_time_min']}分钟。"
+                )
+                return ToolService._build_iframe_result(
+                    tool_name="ev_charge_plan",
+                    tool_label="电动车充电路径规划",
+                    report_type="ev_charge",
+                    payload=payload,
+                    text_data=text_data
+                )
+            except Exception as e:
+                logger.error(f"电动车充电路径规划故障: {e}")
+                return json.dumps({"text_data": f"电动车充电路径规划暂时不可用: {str(e)}"}, ensure_ascii=False)
+
+    @staticmethod
+    async def get_ev_charge_simulation(origin_name: str, destination_name: str, current_soc: int = 45,
+                                       style: str = "均衡", reserve_soc: int = 20):
+        api_key = settings.AMAP_KEY
+        if not api_key:
+            return json.dumps({"text_data": "地图服务未配置，无法生成电动车充电仿真推演。"}, ensure_ascii=False)
+
+        async with httpx.AsyncClient() as client:
+            try:
+                o_loc, o_name, _ = await ToolService._resolve_coordinates(client, api_key, str(origin_name))
+                d_loc, d_name, _ = await ToolService._resolve_coordinates(client, api_key, str(destination_name))
+                if not o_loc or not d_loc:
+                    return json.dumps({"text_data": f"抱歉，无法识别起终点：{origin_name}、{destination_name}。"},
+                                      ensure_ascii=False)
+
+                fallback_route = ToolService._build_fallback_route(o_loc, d_loc)
+                distance_km = fallback_route["distance_km"]
+                duration_min = fallback_route["duration_min"]
+                polyline = fallback_route["polyline"]
+                try:
+                    resp = await client.get(AmapAPI.DIR_DRIVING, params={
+                        "key": api_key,
+                        "origin": o_loc,
+                        "destination": d_loc,
+                        "strategy": 10,
+                        "extensions": "all"
+                    })
+                    data = resp.json()
+                    if data.get("status") == "1" and data.get("route", {}).get("paths"):
+                        path = data["route"]["paths"][0]
+                        distance_km = round(int(path.get("distance", 0)) / 1000, 2)
+                        duration_min = round(int(path.get("duration", 0)) / 60)
+                        polyline = ToolService._extract_polyline_points(path) or polyline
+                except Exception:
+                    pass
+                ev_plan = ToolService._build_ev_charge_plan(
+                    distance_km=distance_km,
+                    duration_min=duration_min,
+                    polyline=polyline,
+                    current_soc=current_soc,
+                    reserve_soc=reserve_soc,
+                    style=style
+                )
+                station_groups = await ToolService._search_charge_stations_along_stops(
+                    client, api_key, ev_plan["charge_stops"]
+                )
+                ToolService._attach_real_charge_stations(ev_plan["charge_stops"], station_groups)
+                events = ToolService._build_ev_simulation_events(
+                    origin_name=o_name,
+                    destination_name=d_name,
+                    distance_km=distance_km,
+                    duration_min=duration_min,
+                    current_soc=current_soc,
+                    reserve_soc=reserve_soc,
+                    charge_stops=ev_plan["charge_stops"]
+                )
+                payload = {
+                    "title": "电动车充电路径仿真推演",
+                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "origin_name": o_name,
+                    "destination_name": d_name,
+                    "origin_loc": ToolService._split_location(o_loc),
+                    "destination_loc": ToolService._split_location(d_loc),
+                    "distance_km": distance_km,
+                    "duration_min": duration_min,
+                    "current_soc": max(5, min(100, int(current_soc))),
+                    "reserve_soc": max(0, min(80, int(reserve_soc))),
+                    "polyline": polyline,
+                    "simulation_events": events,
+                    **ev_plan
+                }
+                text_data = (
+                    f"已生成从{o_name}到{d_name}的电动车充电路径仿真推演："
+                    f"全程约{distance_km}km，包含{len(events)}个行驶/充电事件，可在下方播放查看。"
+                )
+                return ToolService._build_iframe_result(
+                    tool_name="ev_charge_simulation",
+                    tool_label="电动车充电路径仿真推演",
+                    report_type="ev_simulation",
+                    payload=payload,
+                    text_data=text_data
+                )
+            except Exception as e:
+                logger.error(f"电动车充电仿真推演故障: {e}")
+                return json.dumps({"text_data": f"电动车充电仿真推演暂时不可用: {str(e)}"}, ensure_ascii=False)
 
     @staticmethod
     async def search_nearby(keyword: str, city: str = "全国"):
@@ -411,6 +823,20 @@ async def agent_search_nearby(keyword: str, city: str = "全国"):
 async def agent_congestion_check(question: str, city: str = "南京", region: str = "主城区"):
     """当用户要求拥堵体检、拥堵分析、拥堵原因诊断时调用。"""
     return await ToolService.congestion_check(question, city, region)
+
+
+@tool
+async def agent_ev_charge_plan(origin_name: str, destination_name: str, current_soc: int = 45,
+                               style: str = "均衡", reserve_soc: int = 20):
+    """当用户要求电动车充电路线、充电导航、长途电动车补能规划时调用。"""
+    return await ToolService.get_ev_charge_plan(origin_name, destination_name, current_soc, style, reserve_soc)
+
+
+@tool
+async def agent_ev_charge_simulation(origin_name: str, destination_name: str, current_soc: int = 45,
+                                     style: str = "均衡", reserve_soc: int = 20):
+    """当用户要求电动车充电路径仿真、推演、播放、模拟行驶充电过程时调用。"""
+    return await ToolService.get_ev_charge_simulation(origin_name, destination_name, current_soc, style, reserve_soc)
 
 
 @tool

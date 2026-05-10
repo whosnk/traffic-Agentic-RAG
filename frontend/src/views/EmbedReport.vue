@@ -88,6 +88,89 @@
           </div>
         </section>
 
+        <section v-if="reportType === 'ev_charge'" class="section">
+          <div class="meta-grid">
+            <div class="meta-item"><span>起点</span><strong>{{ payload.origin_name || '-' }}</strong></div>
+            <div class="meta-item"><span>终点</span><strong>{{ payload.destination_name || '-' }}</strong></div>
+            <div class="meta-item"><span>出行风格</span><strong>{{ payload.style || '均衡' }}</strong></div>
+            <div class="meta-item"><span>当前电量</span><strong>{{ payload.current_soc ?? '-' }}%</strong></div>
+            <div class="meta-item"><span>预留电量</span><strong>{{ payload.reserve_soc ?? '-' }}%</strong></div>
+            <div class="meta-item"><span>生成时间</span><strong>{{ payload.generated_at || '-' }}</strong></div>
+          </div>
+
+          <div class="kpi-grid">
+            <div class="kpi"><span>总距离</span><strong>{{ payload.distance_km ?? '-' }} km</strong></div>
+            <div class="kpi"><span>行驶耗时</span><strong>{{ payload.duration_min ?? '-' }} min</strong></div>
+            <div class="kpi"><span>建议补能次数</span><strong>{{ (payload.charge_stops || []).length }}</strong></div>
+            <div class="kpi"><span>预计总耗时</span><strong>{{ payload.estimated_total_time_min ?? '-' }} min</strong></div>
+            <div class="kpi"><span>补能等待</span><strong>{{ payload.total_wait_min ?? '-' }} min</strong></div>
+            <div class="kpi"><span>充电费用</span><strong>{{ payload.estimated_energy_cost ?? '-' }} 元</strong></div>
+          </div>
+
+          <div class="list-block">
+            <h3>建议充电节点</h3>
+            <div v-if="!(payload.charge_stops || []).length" class="empty-text">当前电量可覆盖本次行程，暂不建议中途充电。</div>
+            <div v-for="(item, idx) in payload.charge_stops || []" :key="`ev-stop-${idx}`" class="charge-stop">
+              <strong>{{ item.name }}</strong>
+              <p>
+                距起点约 {{ item.distance_from_start_km }} km，
+                目标电量 {{ item.target_soc }}%，
+                预计等待 {{ item.estimated_wait_min }} min，
+                充电 {{ item.estimated_charge_min }} min，
+                费用约 {{ item.estimated_cost }} 元。
+              </p>
+              <p v-if="item.address">地址：{{ item.address }}</p>
+              <span>{{ item.reason }}</span>
+            </div>
+          </div>
+        </section>
+
+        <section v-if="reportType === 'ev_simulation'" class="section">
+          <div class="meta-grid">
+            <div class="meta-item"><span>起点</span><strong>{{ payload.origin_name || '-' }}</strong></div>
+            <div class="meta-item"><span>终点</span><strong>{{ payload.destination_name || '-' }}</strong></div>
+            <div class="meta-item"><span>出行风格</span><strong>{{ payload.style || '均衡' }}</strong></div>
+            <div class="meta-item"><span>事件数量</span><strong>{{ simulationEvents.length }}</strong></div>
+          </div>
+
+          <div class="sim-player">
+            <div class="sim-status">
+              <span>{{ simulationStatus }}</span>
+              <strong>{{ currentSimulationTitle }}</strong>
+              <p>当前 SOC：{{ simulationSoc }}%</p>
+              <div class="soc-track">
+                <div class="soc-fill" :style="{ width: `${simulationSoc}%` }"></div>
+              </div>
+            </div>
+
+            <div class="sim-controls">
+              <button @click="toggleSimulation">{{ isSimPlaying ? '暂停' : '播放' }}</button>
+              <button @click="resetSimulation">重置</button>
+            </div>
+          </div>
+
+          <div class="timeline">
+            <div
+              v-for="(item, idx) in simulationEvents"
+              :key="`sim-${idx}`"
+              :class="simulationItemClass(idx)"
+            >
+              <div class="dot"></div>
+              <div class="timeline-body">
+                <strong>{{ formatSimulationEvent(item) }}</strong>
+                <p v-if="item.type === 'drive'">
+                  {{ item.from }} → {{ item.to }}，{{ item.distance_km }}km，{{ item.duration_min }}min，
+                  SOC {{ item.start_soc }}% → {{ item.end_soc }}%
+                </p>
+                <p v-else>
+                  {{ item.station }}，等待 {{ item.wait_min }}min，充电 {{ item.charge_min }}min，
+                  SOC {{ item.start_soc }}% → {{ item.end_soc }}%，费用约 {{ item.estimated_cost }} 元
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="section">
           <h3>地图画布</h3>
           <div ref="mapRef" class="map-box"></div>
@@ -99,7 +182,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 
 const route = useRoute();
@@ -109,11 +192,17 @@ const errorMsg = ref('');
 const mapHint = ref('');
 const mapRef = ref<HTMLElement | null>(null);
 let mapInstance: any = null;
+let simTimer: number | null = null;
+const isSimPlaying = ref(false);
+const activeEventIndex = ref(0);
+const simProgress = ref(0);
 
 const pageTitle = computed(() => {
   if (reportType.value === 'congestion') return payload.value.title || '城市拥堵体检报告';
   if (reportType.value === 'route') return payload.value.title || '路线规划报告';
   if (reportType.value === 'nearby') return payload.value.title || '周边搜索报告';
+  if (reportType.value === 'ev_charge') return payload.value.title || '电动车充电路径规划报告';
+  if (reportType.value === 'ev_simulation') return payload.value.title || '电动车充电路径仿真推演';
   return '报告页';
 });
 
@@ -133,6 +222,88 @@ const decodePayload = (raw: string) => {
   return JSON.parse(text);
 };
 
+const simulationEvents = computed(() => payload.value.simulation_events || []);
+
+const currentSimulationEvent = computed(() => {
+  return simulationEvents.value[activeEventIndex.value] || null;
+});
+
+const simulationStatus = computed(() => {
+  const event = currentSimulationEvent.value;
+  if (!event) return '仿真完成';
+  if (event.type === 'charge') return '正在充电';
+  return '行驶中';
+});
+
+const currentSimulationTitle = computed(() => {
+  const event = currentSimulationEvent.value;
+  if (!event) return `${payload.value.destination_name || '终点'} 已到达`;
+  if (event.type === 'charge') return event.station || '建议充电站';
+  return `${event.from || '-'} → ${event.to || '-'}`;
+});
+
+const simulationSoc = computed(() => {
+  const event = currentSimulationEvent.value;
+  if (!event) return payload.value.reserve_soc || 20;
+  const start = Number(event.start_soc || 0);
+  const end = Number(event.end_soc || start);
+  return Math.round(start + (end - start) * simProgress.value);
+});
+
+const stopSimulation = () => {
+  if (simTimer !== null) {
+    window.clearInterval(simTimer);
+    simTimer = null;
+  }
+  isSimPlaying.value = false;
+};
+
+const resetSimulation = () => {
+  stopSimulation();
+  activeEventIndex.value = 0;
+  simProgress.value = 0;
+};
+
+const tickSimulation = () => {
+  if (!simulationEvents.value.length) {
+    stopSimulation();
+    return;
+  }
+  simProgress.value += 0.04;
+  if (simProgress.value >= 1) {
+    simProgress.value = 0;
+    activeEventIndex.value += 1;
+    if (activeEventIndex.value >= simulationEvents.value.length) {
+      activeEventIndex.value = simulationEvents.value.length - 1;
+      simProgress.value = 1;
+      stopSimulation();
+    }
+  }
+};
+
+const toggleSimulation = () => {
+  if (isSimPlaying.value) {
+    stopSimulation();
+    return;
+  }
+  if (!simulationEvents.value.length) return;
+  if (activeEventIndex.value >= simulationEvents.value.length - 1 && simProgress.value >= 1) {
+    resetSimulation();
+  }
+  isSimPlaying.value = true;
+  simTimer = window.setInterval(tickSimulation, 240);
+};
+
+const formatSimulationEvent = (item: any) => {
+  if (item.type === 'charge') return `充电停靠：${item.station || '建议充电站'}`;
+  return `行驶路段：${item.from || '-'} → ${item.to || '-'}`;
+};
+
+const simulationItemClass = (idx: any) => {
+  const i = Number(idx);
+  return ['timeline-item', i === activeEventIndex.value ? 'active' : '', i < activeEventIndex.value ? 'done' : ''];
+};
+
 const parseQuery = () => {
   try {
     const type = String(route.query.type || '').trim();
@@ -144,6 +315,7 @@ const parseQuery = () => {
     reportType.value = type;
     payload.value = decodePayload(data);
     errorMsg.value = '';
+    resetSimulation();
   } catch (e) {
     errorMsg.value = '报告数据解析失败，请重新发起工具调用。';
   }
@@ -169,6 +341,17 @@ const loadAmap = async (key: string) => {
     script.onload = () => resolve();
     script.onerror = () => reject(new Error('load fail'));
     document.body.appendChild(script);
+  });
+};
+
+const loadAmapPlugin = (pluginName: string) => {
+  const AMap = (window as any).AMap;
+  return new Promise<void>((resolve, reject) => {
+    if (!AMap || typeof AMap.plugin !== 'function') {
+      reject(new Error('plugin unavailable'));
+      return;
+    }
+    AMap.plugin(pluginName, () => resolve());
   });
 };
 
@@ -200,8 +383,80 @@ const collectMapElements = () => {
       }
     });
     if (payload.value.anchor_loc) center = payload.value.anchor_loc;
+  } else if (reportType.value === 'ev_charge' || reportType.value === 'ev_simulation') {
+    if (payload.value.origin_loc) markers.push({ position: payload.value.origin_loc, title: payload.value.origin_name || '起点' });
+    if (payload.value.destination_loc) markers.push({ position: payload.value.destination_loc, title: payload.value.destination_name || '终点' });
+    if (Array.isArray(payload.value.polyline) && payload.value.polyline.length > 1) {
+      polylines.push(payload.value.polyline);
+    }
+    if (payload.value.origin_loc) center = payload.value.origin_loc;
   }
   return { center, markers, polylines };
+};
+
+const shouldDrawRoadRoute = () => {
+  return ['route', 'ev_charge', 'ev_simulation'].includes(reportType.value)
+    && payload.value.origin_loc
+    && payload.value.destination_loc;
+};
+
+const extractRoadPath = (result: any) => {
+  const points: any[] = [];
+  const steps = result?.routes?.[0]?.steps || [];
+  steps.forEach((step: any) => {
+    (step.path || []).forEach((point: any) => points.push(point));
+  });
+  return points;
+};
+
+const pickRoadPoint = (roadPath: any[], fraction: number) => {
+  if (!roadPath.length) return null;
+  const idx = Math.max(0, Math.min(roadPath.length - 1, Math.round((roadPath.length - 1) * fraction)));
+  return roadPath[idx];
+};
+
+const addEvStopMarkersOnRoad = (roadPath: any[], objects: any[]) => {
+  const AMap = (window as any).AMap;
+  const totalDistance = Number(payload.value.distance_km || 0);
+  if (!AMap || !roadPath.length || !totalDistance) return;
+
+  (payload.value.charge_stops || []).forEach((stop: any) => {
+    const stopDistance = Number(stop.distance_from_start_km || 0);
+    const roadPoint = pickRoadPoint(roadPath, stopDistance / totalDistance);
+    if (!roadPoint) return;
+    const marker = new AMap.Marker({
+      position: roadPoint,
+      title: stop.name || '建议充电站'
+    });
+    objects.push(marker);
+    mapInstance.add(marker);
+  });
+};
+
+const drawRoadRoute = async () => {
+  const AMap = (window as any).AMap;
+  if (!mapInstance || !AMap || !shouldDrawRoadRoute()) return [];
+
+  try {
+    await loadAmapPlugin('AMap.Driving');
+    const origin = new AMap.LngLat(payload.value.origin_loc[0], payload.value.origin_loc[1]);
+    const destination = new AMap.LngLat(payload.value.destination_loc[0], payload.value.destination_loc[1]);
+    const driving = new AMap.Driving({
+      map: mapInstance,
+      policy: AMap.DrivingPolicy.LEAST_TIME,
+      hideMarkers: true
+    });
+
+    const roadPath = await new Promise<any[]>((resolve, reject) => {
+      driving.search(origin, destination, (status: string, result: any) => {
+        if (status === 'complete') resolve(extractRoadPath(result));
+        else reject(new Error('route fail'));
+      });
+    });
+    return roadPath;
+  } catch (e) {
+    return [];
+  }
 };
 
 const renderMap = async () => {
@@ -235,16 +490,21 @@ const renderMap = async () => {
       mapInstance.add(marker);
     });
 
-    polylines.forEach((line) => {
-      const polyline = new AMap.Polyline({
-        path: line,
-        strokeColor: '#2f95ff',
-        strokeWeight: 6,
-        strokeOpacity: 0.85
+    const roadPath = await drawRoadRoute();
+    if (roadPath.length) {
+      addEvStopMarkersOnRoad(roadPath, objects);
+    } else {
+      polylines.forEach((line) => {
+        const polyline = new AMap.Polyline({
+          path: line,
+          strokeColor: '#2f95ff',
+          strokeWeight: 6,
+          strokeOpacity: 0.85
+        });
+        objects.push(polyline);
+        mapInstance.add(polyline);
       });
-      objects.push(polyline);
-      mapInstance.add(polyline);
-    });
+    }
 
     if (objects.length) mapInstance.setFitView(objects, false, [50, 50, 50, 50]);
     mapHint.value = '';
@@ -262,6 +522,10 @@ watch(
   },
   { immediate: true }
 );
+
+onUnmounted(() => {
+  stopSimulation();
+});
 </script>
 
 <style scoped lang="scss">
@@ -357,6 +621,150 @@ watch(
     margin: 0;
     font-size: 13px;
     line-height: 1.5;
+  }
+}
+
+.charge-stop {
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  &:last-child {
+    border-bottom: none;
+  }
+  strong {
+    display: block;
+    font-size: 14px;
+    color: #1f2d3d;
+    margin-bottom: 4px;
+  }
+  p {
+    margin: 0 0 4px;
+  }
+  span {
+    display: block;
+    font-size: 12px;
+    color: #6f7b8d;
+  }
+}
+
+.empty-text {
+  font-size: 13px;
+  color: #6f7b8d;
+}
+
+.sim-player {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--ai-border);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(239, 246, 255, 0.94), rgba(255,255,255,0.9));
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.sim-status {
+  flex: 1;
+  span {
+    display: inline-flex;
+    margin-bottom: 6px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: #eaf4ff;
+    color: #1f5b90;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  strong {
+    display: block;
+    font-size: 18px;
+    color: var(--ai-text);
+    margin-bottom: 4px;
+  }
+  p {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: #526071;
+  }
+}
+
+.soc-track {
+  height: 10px;
+  border-radius: 999px;
+  background: #dbe6f3;
+  overflow: hidden;
+}
+
+.soc-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #1fb981, #44d7a8);
+  transition: width 0.22s ease;
+}
+
+.sim-controls {
+  display: flex;
+  gap: 8px;
+  button {
+    border: none;
+    border-radius: 999px;
+    padding: 8px 14px;
+    cursor: pointer;
+    background: var(--ai-gradient);
+    color: #fff;
+    font-weight: 800;
+  }
+  button + button {
+    background: #eef2f7;
+    color: #334155;
+  }
+}
+
+.timeline {
+  margin-top: 12px;
+  border: 1px solid var(--ai-border);
+  border-radius: 18px;
+  background: rgba(255,255,255,0.86);
+  padding: 12px;
+}
+
+.timeline-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px 0;
+  opacity: 0.55;
+  .dot {
+    width: 10px;
+    height: 10px;
+    margin-top: 6px;
+    border-radius: 50%;
+    background: #cbd5e1;
+    flex: 0 0 auto;
+  }
+  &.active, &.done {
+    opacity: 1;
+  }
+  &.active .dot {
+    background: #2f95ff;
+    box-shadow: 0 0 0 5px rgba(47,149,255,0.12);
+  }
+  &.done .dot {
+    background: #1fb981;
+  }
+}
+
+.timeline-body {
+  strong {
+    display: block;
+    font-size: 14px;
+    color: #1f2d3d;
+    margin-bottom: 3px;
+  }
+  p {
+    margin: 0;
+    font-size: 13px;
+    color: #526071;
+    line-height: 1.55;
   }
 }
 

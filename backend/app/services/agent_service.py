@@ -10,7 +10,13 @@ from app.core.config import settings
 from app.core.prompts import AGENT_SYSTEM_PROMPT
 from app.models.chat import ChatMessage
 from app.services.config_service import ConfigService
-from app.services.tool_service import agent_get_route, agent_search_nearby, agent_congestion_check
+from app.services.tool_service import (
+    agent_get_route,
+    agent_search_nearby,
+    agent_congestion_check,
+    agent_ev_charge_plan,
+    agent_ev_charge_simulation
+)
 
 logger = logging.getLogger("AgentService")
 
@@ -32,7 +38,13 @@ class AgentService:
         if not final_base_url and "deepseek" in final_llm_model.lower():
             final_base_url = "https://api.deepseek.com"
 
-        self.tools = [agent_get_route, agent_search_nearby, agent_congestion_check]
+        self.tools = [
+            agent_get_route,
+            agent_search_nearby,
+            agent_congestion_check,
+            agent_ev_charge_plan,
+            agent_ev_charge_simulation
+        ]
         self.llm = ChatOpenAI(
             model=final_llm_model,
             openai_api_key=final_llm_key,
@@ -57,6 +69,10 @@ class AgentService:
         return messages
 
     def _get_tool_status_text(self, tool_name):
+        if "simulation" in tool_name:
+            return "🔄 **正在生成电动车充电路径仿真推演...**\n\n"
+        if "ev" in tool_name or "charge" in tool_name:
+            return "🔄 **正在生成电动车充电路径规划报告...**\n\n"
         if "congestion" in tool_name:
             return "🔄 **正在生成城市拥堵体检报告...**\n\n"
         if "route" in tool_name:

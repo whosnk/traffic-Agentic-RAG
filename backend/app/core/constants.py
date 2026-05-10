@@ -9,6 +9,7 @@ class AmapAPI:
     # 1. 基础数据查询接口
     GEOCODE = f"{REST_API_BASE}/geocode/geo"           # 地理编码（地址转坐标）
     PLACE_TEXT = f"{REST_API_BASE}/place/text"         # POI 文本搜索
+    PLACE_AROUND = f"{REST_API_BASE}/place/around"     # POI 周边搜索
     WEATHER_INFO = f"{REST_API_BASE}/weather/weatherInfo" # 天气查询
 
     # 2. 路线规划接口
